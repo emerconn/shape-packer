@@ -3,7 +3,17 @@ This program can quickly solve the 2D bin packing problem for any number of any 
 <img width="640" height="480" alt="30 triangles in a hexagon" src="https://github.com/user-attachments/assets/48591a93-3ed9-4031-9c42-8b6eb579d91e" />
 
 ### How to use
-Download the python file, navigate to its location and run it like this:
+Run the Go version like this:
+
+`go run . [n] [nsi] [nsc]`
+
+Or build a binary first:
+
+`go build -o polygon_packer .`
+
+`./polygon_packer [n] [nsi] [nsc]`
+
+The original Python script can still be run like this:
 
 `python3 polygon_packer.py [n] [nsi] [nsc]`
 - Replace `[n]` with the number of inner polygons you want to solve for

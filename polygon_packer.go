@@ -1,0 +1,1031 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"image"
+	"image/color"
+	"image/png"
+	"math"
+	"math/rand"
+	"os"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+)
+
+const (
+	defaultAttempts         = 1000
+	defaultPenaltyTolerance = 1e-8
+	defaultFinalStepSize    = 0.0001
+
+	lbfgsHistorySize       = 10
+	lbfgsMaxIterations     = 1000
+	lbfgsMaxFunctionEvals  = 15000
+	lbfgsGradientEps       = 1e-8
+	lbfgsGradientTolerance = 1e-5
+
+	basinHoppingIterations = 50
+	basinHoppingTemp       = 0.1
+	basinHoppingStepSize   = 0.1
+)
+
+var errHelp = errors.New("help requested")
+
+type point struct {
+	x float64
+	y float64
+}
+
+type config struct {
+	innerPolygons    int
+	innerSides       int
+	containerSides   int
+	attempts         int
+	penaltyTolerance float64
+	finalStepSize    float64
+
+	unitPolygonVertices   []point
+	unitPolygonVectors    []point
+	unitContainerVertices []point
+	unitContainerVectors  []point
+	unitContainerApothem  float64
+}
+
+type evaluator struct {
+	cfg     *config
+	polys   []point
+	vectors []point
+}
+
+type optResult struct {
+	x          []float64
+	fun        float64
+	iterations int
+	evals      int
+}
+
+type attemptResult struct {
+	seed   int
+	side   float64
+	values []float64
+}
+
+func main() {
+	cfg, err := parseArgs(os.Args[1:])
+	if err != nil {
+		if errors.Is(err, errHelp) {
+			fmt.Print(usage())
+			return
+		}
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprint(os.Stderr, usage())
+		os.Exit(2)
+	}
+
+	results := runAttempts(cfg)
+	bestSide := math.Inf(1)
+	var bestValues []float64
+	for _, result := range results {
+		if result.side < bestSide {
+			bestSide = result.side
+			bestValues = result.values
+		}
+	}
+
+	sideLength := bestSide * math.Sin(math.Pi/float64(cfg.containerSides)) / math.Sin(math.Pi/float64(cfg.innerSides))
+	fmt.Println("Final side length:", sideLength)
+
+	filename := fmt.Sprintf("%d_%d_in_%d.png", cfg.innerPolygons, cfg.innerSides, cfg.containerSides)
+	if err := savePlot(filename, cfg, bestSide, bestValues, sideLength); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func parseArgs(args []string) (*config, error) {
+	attempts := defaultAttempts
+	tolerance := defaultPenaltyTolerance
+	finalStep := defaultFinalStepSize
+	positional := make([]string, 0, 3)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-h" || arg == "--help":
+			return nil, errHelp
+		case arg == "--attempts":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--attempts requires a value")
+			}
+			value, err := strconv.Atoi(args[i])
+			if err != nil {
+				return nil, fmt.Errorf("invalid --attempts value %q: %w", args[i], err)
+			}
+			attempts = value
+		case strings.HasPrefix(arg, "--attempts="):
+			valueText := strings.TrimPrefix(arg, "--attempts=")
+			value, err := strconv.Atoi(valueText)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --attempts value %q: %w", valueText, err)
+			}
+			attempts = value
+		case arg == "--tolerance":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--tolerance requires a value")
+			}
+			value, err := strconv.ParseFloat(args[i], 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --tolerance value %q: %w", args[i], err)
+			}
+			tolerance = value
+		case strings.HasPrefix(arg, "--tolerance="):
+			valueText := strings.TrimPrefix(arg, "--tolerance=")
+			value, err := strconv.ParseFloat(valueText, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --tolerance value %q: %w", valueText, err)
+			}
+			tolerance = value
+		case arg == "--finalstep":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--finalstep requires a value")
+			}
+			value, err := strconv.ParseFloat(args[i], 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --finalstep value %q: %w", args[i], err)
+			}
+			finalStep = value
+		case strings.HasPrefix(arg, "--finalstep="):
+			valueText := strings.TrimPrefix(arg, "--finalstep=")
+			value, err := strconv.ParseFloat(valueText, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --finalstep value %q: %w", valueText, err)
+			}
+			finalStep = value
+		case strings.HasPrefix(arg, "-"):
+			return nil, fmt.Errorf("unknown option %q", arg)
+		default:
+			positional = append(positional, arg)
+		}
+	}
+
+	if len(positional) != 3 {
+		return nil, fmt.Errorf("expected 3 positional arguments, got %d", len(positional))
+	}
+
+	innerPolygons, err := strconv.Atoi(positional[0])
+	if err != nil {
+		return nil, fmt.Errorf("invalid inner polygon count %q: %w", positional[0], err)
+	}
+	innerSides, err := strconv.Atoi(positional[1])
+	if err != nil {
+		return nil, fmt.Errorf("invalid inner side count %q: %w", positional[1], err)
+	}
+	containerSides, err := strconv.Atoi(positional[2])
+	if err != nil {
+		return nil, fmt.Errorf("invalid container side count %q: %w", positional[2], err)
+	}
+	if innerPolygons <= 0 {
+		return nil, fmt.Errorf("inner polygon count must be positive")
+	}
+	if innerSides < 3 {
+		return nil, fmt.Errorf("inner polygon side count must be at least 3")
+	}
+	if containerSides < 3 {
+		return nil, fmt.Errorf("container polygon side count must be at least 3")
+	}
+	if attempts <= 0 {
+		return nil, fmt.Errorf("--attempts must be positive")
+	}
+	if tolerance < 0 {
+		return nil, fmt.Errorf("--tolerance must be non-negative")
+	}
+	if finalStep <= 0 || finalStep >= 1 {
+		return nil, fmt.Errorf("--finalstep must be between 0 and 1")
+	}
+
+	cfg := &config{
+		innerPolygons:    innerPolygons,
+		innerSides:       innerSides,
+		containerSides:   containerSides,
+		attempts:         attempts,
+		penaltyTolerance: tolerance,
+		finalStepSize:    finalStep,
+	}
+	cfg.precompute()
+	return cfg, nil
+}
+
+func usage() string {
+	return `Usage:
+  polygon_packer inner_polygons inner_sides container_sides [--attempts N] [--tolerance F] [--finalstep F]
+
+Arguments:
+  inner_polygons   Number of inner polygons
+  inner_sides      Number of sides of the inner polygons
+  container_sides  Number of sides of the container polygon
+
+Options:
+  --attempts N     Number of attempts to run (default 1000)
+  --tolerance F    Overlap penalty tolerance (default 1e-8)
+  --finalstep F    Smallest theoretical container-size shrink step (default 0.0001)
+`
+}
+
+func (cfg *config) precompute() {
+	cfg.unitPolygonVertices = make([]point, cfg.innerSides)
+	cfg.unitPolygonVectors = make([]point, cfg.innerSides)
+	for i := 0; i < cfg.innerSides; i++ {
+		angle := 2 * math.Pi * float64(i) / float64(cfg.innerSides)
+		cfg.unitPolygonVertices[i] = point{x: math.Cos(angle), y: math.Sin(angle)}
+		vectorAngle := angle + math.Pi/float64(cfg.innerSides)
+		cfg.unitPolygonVectors[i] = point{x: math.Cos(vectorAngle), y: math.Sin(vectorAngle)}
+	}
+
+	cfg.unitContainerVertices = make([]point, cfg.containerSides)
+	cfg.unitContainerVectors = make([]point, cfg.containerSides)
+	for i := 0; i < cfg.containerSides; i++ {
+		angle := 2 * math.Pi * float64(i) / float64(cfg.containerSides)
+		cfg.unitContainerVertices[i] = point{x: math.Cos(angle), y: math.Sin(angle)}
+		vectorAngle := angle + math.Pi/float64(cfg.containerSides)
+		cfg.unitContainerVectors[i] = point{x: math.Cos(vectorAngle), y: math.Sin(vectorAngle)}
+	}
+	cfg.unitContainerApothem = math.Cos(math.Pi / float64(cfg.containerSides))
+}
+
+func newEvaluator(cfg *config) *evaluator {
+	return &evaluator{
+		cfg:     cfg,
+		polys:   make([]point, cfg.innerPolygons*cfg.innerSides),
+		vectors: make([]point, cfg.innerPolygons*cfg.innerSides),
+	}
+}
+
+func runAttempts(cfg *config) []attemptResult {
+	workers := runtime.NumCPU()
+	if workers > cfg.attempts {
+		workers = cfg.attempts
+	}
+
+	jobs := make(chan int)
+	results := make([]attemptResult, cfg.attempts)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for worker := 0; worker < workers; worker++ {
+		go func() {
+			defer wg.Done()
+			for seed := range jobs {
+				results[seed] = repetition(seed, cfg)
+			}
+		}()
+	}
+
+	for seed := 0; seed < cfg.attempts; seed++ {
+		jobs <- seed
+	}
+	close(jobs)
+	wg.Wait()
+	return results
+}
+
+func repetition(seed int, cfg *config) attemptResult {
+	fmt.Println("Attempt", seed)
+
+	rng := rand.New(rand.NewSource(int64(seed)))
+	sqrtN := math.Sqrt(float64(cfg.innerPolygons))
+	dynamicSide := sqrtN * (2 + rng.Float64()*2)
+	initialSide := dynamicSide
+	lowestSide := sqrtN * float64(cfg.innerSides) / float64(cfg.containerSides)
+	sideRange := initialSide - lowestSide
+
+	x0 := initialValues(rng, cfg, dynamicSide)
+	lastValidX := cloneFloat64s(x0)
+	lastValidSide := dynamicSide
+	eval := newEvaluator(cfg)
+
+	for {
+		sideForObjective := dynamicSide
+		minimized := minimizeLBFGS(x0, func(x []float64) float64 {
+			return eval.value(x, sideForObjective)
+		}, 1e-8)
+
+		multiplier := 1 - cfg.finalStepSize - (dynamicSide-lowestSide)*(0.01-cfg.finalStepSize)/sideRange
+		if minimized.fun < cfg.penaltyTolerance {
+			lastValidX = cloneFloat64s(minimized.x)
+			lastValidSide = dynamicSide
+			x0 = scaleFloat64s(minimized.x, multiplier)
+			dynamicSide *= multiplier
+			continue
+		}
+
+		basinResult := basinHopping(x0, func(x []float64) float64 {
+			return eval.value(x, sideForObjective)
+		}, rng)
+		if basinResult.fun < cfg.penaltyTolerance {
+			lastValidX = cloneFloat64s(basinResult.x)
+			lastValidSide = dynamicSide
+			x0 = scaleFloat64s(basinResult.x, multiplier)
+			dynamicSide *= multiplier
+			continue
+		}
+		break
+	}
+
+	return attemptResult{seed: seed, side: lastValidSide, values: lastValidX}
+}
+
+func initialValues(rng *rand.Rand, cfg *config, dynamicSide float64) []float64 {
+	values := make([]float64, cfg.innerPolygons*3)
+	if rng.Float64() < 0.5 {
+		low := -dynamicSide / 2
+		high := dynamicSide / 2
+		width := high - low
+		for i := range values {
+			values[i] = low + rng.Float64()*width
+		}
+		return values
+	}
+
+	gridCount := int(math.Ceil(math.Sqrt(float64(cfg.innerPolygons))))
+	grid := linspace(-dynamicSide/2*0.9, dynamicSide/2*0.9, gridCount)
+	index := 0
+	for y := 0; y < gridCount && index < cfg.innerPolygons; y++ {
+		for x := 0; x < gridCount && index < cfg.innerPolygons; x++ {
+			values[index*3] = grid[x]
+			values[index*3+1] = grid[y]
+			index++
+		}
+	}
+	for i := 0; i < cfg.innerPolygons; i++ {
+		values[i*3+2] = rng.Float64() * 2 * math.Pi
+	}
+	return values
+}
+
+func linspace(start, stop float64, count int) []float64 {
+	values := make([]float64, count)
+	if count == 1 {
+		values[0] = start
+		return values
+	}
+	step := (stop - start) / float64(count-1)
+	for i := 0; i < count; i++ {
+		values[i] = start + float64(i)*step
+	}
+	return values
+}
+
+func (e *evaluator) value(values []float64, side float64) float64 {
+	cfg := e.cfg
+	penalty := 0.0
+	for i := 0; i < cfg.innerPolygons; i++ {
+		posX := values[i*3]
+		posY := values[i*3+1]
+		rotation := values[i*3+2]
+		polygon := e.polys[i*cfg.innerSides : (i+1)*cfg.innerSides]
+		vectors := e.vectors[i*cfg.innerSides : (i+1)*cfg.innerSides]
+		transformPolygon(posX, posY, rotation, cfg.unitPolygonVertices, polygon)
+		rotateVectors(rotation, cfg.unitPolygonVectors, vectors)
+		penalty += e.pokingPenalty(polygon, side)
+	}
+
+	for i := 0; i < cfg.innerPolygons; i++ {
+		polygonI := e.polys[i*cfg.innerSides : (i+1)*cfg.innerSides]
+		vectorsI := e.vectors[i*cfg.innerSides : (i+1)*cfg.innerSides]
+		for j := i + 1; j < cfg.innerPolygons; j++ {
+			polygonJ := e.polys[j*cfg.innerSides : (j+1)*cfg.innerSides]
+			vectorsJ := e.vectors[j*cfg.innerSides : (j+1)*cfg.innerSides]
+			collision := true
+			minOverlap := 1e20
+
+			for axis := 0; axis < cfg.innerSides*2; axis++ {
+				var axisX, axisY float64
+				if axis < cfg.innerSides {
+					axisX = vectorsI[axis].x
+					axisY = vectorsI[axis].y
+				} else {
+					vector := vectorsJ[axis-cfg.innerSides]
+					axisX = vector.x
+					axisY = vector.y
+				}
+
+				minI, maxI := projectPolygon(polygonI, axisX, axisY)
+				minJ, maxJ := projectPolygon(polygonJ, axisX, axisY)
+				overlap := math.Min(maxI, maxJ) - math.Max(minI, minJ)
+				if overlap <= 0 {
+					collision = false
+					break
+				}
+				if overlap < minOverlap {
+					minOverlap = overlap
+				}
+			}
+
+			if collision {
+				penalty += minOverlap * minOverlap
+			}
+		}
+	}
+
+	return penalty
+}
+
+func transformPolygon(x, y, angle float64, vertices []point, out []point) {
+	cosAngle := math.Cos(angle)
+	sinAngle := math.Sin(angle)
+	for i, vertex := range vertices {
+		out[i] = point{
+			x: x + (vertex.x*cosAngle - vertex.y*sinAngle),
+			y: y + (vertex.x*sinAngle + vertex.y*cosAngle),
+		}
+	}
+}
+
+func rotateVectors(angle float64, vectors []point, out []point) {
+	cosAngle := math.Cos(angle)
+	sinAngle := math.Sin(angle)
+	for i, vector := range vectors {
+		out[i] = point{
+			x: vector.x*cosAngle - vector.y*sinAngle,
+			y: vector.x*sinAngle + vector.y*cosAngle,
+		}
+	}
+}
+
+func (e *evaluator) pokingPenalty(vertices []point, side float64) float64 {
+	penalty := 0.0
+	limit := e.cfg.unitContainerApothem * side
+	for _, vertex := range vertices {
+		for _, vector := range e.cfg.unitContainerVectors {
+			distance := vertex.x*vector.x + vertex.y*vector.y
+			if distance > limit {
+				diff := distance - limit
+				penalty += diff * diff
+			}
+		}
+	}
+	return penalty
+}
+
+func projectPolygon(vertices []point, axisX, axisY float64) (float64, float64) {
+	minValue := 1e20
+	maxValue := -1e20
+	for _, vertex := range vertices {
+		dot := vertex.x*axisX + vertex.y*axisY
+		if dot < minValue {
+			minValue = dot
+		}
+		if dot > maxValue {
+			maxValue = dot
+		}
+	}
+	return minValue, maxValue
+}
+
+func minimizeLBFGS(x0 []float64, objective func([]float64) float64, tol float64) optResult {
+	n := len(x0)
+	x := cloneFloat64s(x0)
+	fun := objective(x)
+	evals := 1
+	gradient := make([]float64, n)
+	gradientEvals := finiteDifferenceGradient(objective, x, fun, gradient, lbfgsMaxFunctionEvals-evals)
+	evals += gradientEvals
+
+	sHistory := make([][]float64, 0, lbfgsHistorySize)
+	yHistory := make([][]float64, 0, lbfgsHistorySize)
+	rhoHistory := make([]float64, 0, lbfgsHistorySize)
+	iterations := 0
+
+	for iterations < lbfgsMaxIterations && evals < lbfgsMaxFunctionEvals {
+		if maxAbs(gradient) <= lbfgsGradientTolerance {
+			break
+		}
+
+		direction := lbfgsDirection(gradient, sHistory, yHistory, rhoHistory)
+		if dot(direction, gradient) >= 0 || !allFinite(direction) {
+			for i := range direction {
+				direction[i] = -gradient[i]
+			}
+		}
+
+		newX, newFun, lineEvals, ok := lineSearch(objective, x, fun, gradient, direction, lbfgsMaxFunctionEvals-evals)
+		evals += lineEvals
+		if !ok {
+			break
+		}
+
+		newGradient := make([]float64, n)
+		gradientEvals = finiteDifferenceGradient(objective, newX, newFun, newGradient, lbfgsMaxFunctionEvals-evals)
+		evals += gradientEvals
+
+		step := subtract(newX, x)
+		gradientDelta := subtract(newGradient, gradient)
+		ys := dot(gradientDelta, step)
+		if ys > 1e-12 && isFinite(ys) {
+			if len(sHistory) == lbfgsHistorySize {
+				copy(sHistory, sHistory[1:])
+				copy(yHistory, yHistory[1:])
+				copy(rhoHistory, rhoHistory[1:])
+				sHistory = sHistory[:lbfgsHistorySize-1]
+				yHistory = yHistory[:lbfgsHistorySize-1]
+				rhoHistory = rhoHistory[:lbfgsHistorySize-1]
+			}
+			sHistory = append(sHistory, step)
+			yHistory = append(yHistory, gradientDelta)
+			rhoHistory = append(rhoHistory, 1/ys)
+		}
+
+		relativeReduction := math.Abs(fun-newFun) / math.Max(1, math.Max(math.Abs(fun), math.Abs(newFun)))
+		x = newX
+		fun = newFun
+		gradient = newGradient
+		iterations++
+		if relativeReduction <= tol {
+			break
+		}
+	}
+
+	return optResult{x: x, fun: fun, iterations: iterations, evals: evals}
+}
+
+func finiteDifferenceGradient(objective func([]float64) float64, x []float64, f0 float64, gradient []float64, maxEvals int) int {
+	evals := 0
+	for i := range x {
+		if evals >= maxEvals {
+			for j := i; j < len(x); j++ {
+				gradient[j] = 0
+			}
+			break
+		}
+		original := x[i]
+		x[i] = original + lbfgsGradientEps
+		f1 := objective(x)
+		x[i] = original
+		if isFinite(f1) {
+			gradient[i] = (f1 - f0) / lbfgsGradientEps
+		} else {
+			gradient[i] = 0
+		}
+		evals++
+	}
+	return evals
+}
+
+func lbfgsDirection(gradient []float64, sHistory, yHistory [][]float64, rhoHistory []float64) []float64 {
+	q := cloneFloat64s(gradient)
+	alpha := make([]float64, len(sHistory))
+	for i := len(sHistory) - 1; i >= 0; i-- {
+		alpha[i] = rhoHistory[i] * dot(sHistory[i], q)
+		axpy(q, yHistory[i], -alpha[i])
+	}
+
+	scale := 1.0
+	if len(sHistory) > 0 {
+		lastS := sHistory[len(sHistory)-1]
+		lastY := yHistory[len(yHistory)-1]
+		yy := dot(lastY, lastY)
+		if yy > 0 {
+			scale = dot(lastS, lastY) / yy
+		}
+	}
+
+	r := make([]float64, len(q))
+	for i := range q {
+		r[i] = q[i] * scale
+	}
+	for i := 0; i < len(sHistory); i++ {
+		beta := rhoHistory[i] * dot(yHistory[i], r)
+		axpy(r, sHistory[i], alpha[i]-beta)
+	}
+	for i := range r {
+		r[i] = -r[i]
+	}
+	return r
+}
+
+func lineSearch(objective func([]float64) float64, x []float64, f0 float64, gradient []float64, direction []float64, maxEvals int) ([]float64, float64, int, bool) {
+	derivative := dot(gradient, direction)
+	if derivative >= 0 || !isFinite(derivative) || maxEvals <= 0 {
+		return nil, 0, 0, false
+	}
+
+	const armijo = 1e-4
+	step := 1.0
+	evals := 0
+	trial := make([]float64, len(x))
+	bestX := cloneFloat64s(x)
+	bestFun := f0
+	improved := false
+
+	for evals < maxEvals && step > 1e-20 {
+		for i := range x {
+			trial[i] = x[i] + step*direction[i]
+		}
+		trialFun := objective(trial)
+		evals++
+		if isFinite(trialFun) {
+			if trialFun < bestFun {
+				copy(bestX, trial)
+				bestFun = trialFun
+				improved = true
+			}
+			if trialFun <= f0+armijo*step*derivative {
+				return cloneFloat64s(trial), trialFun, evals, true
+			}
+		}
+		step *= 0.5
+	}
+
+	if improved {
+		return bestX, bestFun, evals, true
+	}
+	return nil, 0, evals, false
+}
+
+func basinHopping(x0 []float64, objective func([]float64) float64, rng *rand.Rand) optResult {
+	current := minimizeLBFGS(x0, objective, 1e-8)
+	best := optResult{
+		x:          cloneFloat64s(current.x),
+		fun:        current.fun,
+		iterations: current.iterations,
+		evals:      current.evals,
+	}
+
+	for i := 0; i < basinHoppingIterations; i++ {
+		trial := cloneFloat64s(current.x)
+		for j := range trial {
+			trial[j] += (rng.Float64()*2 - 1) * basinHoppingStepSize
+		}
+
+		minimized := minimizeLBFGS(trial, objective, 1e-8)
+		delta := minimized.fun - current.fun
+		if delta < 0 || rng.Float64() < math.Exp(-delta/basinHoppingTemp) {
+			current = minimized
+			if current.fun < best.fun {
+				best = optResult{
+					x:          cloneFloat64s(current.x),
+					fun:        current.fun,
+					iterations: current.iterations,
+					evals:      current.evals,
+				}
+			}
+		}
+	}
+
+	return best
+}
+
+func savePlot(filename string, cfg *config, side float64, values []float64, sideLength float64) error {
+	const (
+		width     = 640
+		height    = 480
+		titleArea = 40
+		margin    = 24
+	)
+
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	fillImage(img, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+
+	polygons := make([][]point, cfg.innerPolygons)
+	allPoints := make([]point, 0, cfg.containerSides+cfg.innerPolygons*cfg.innerSides)
+	container := make([]point, cfg.containerSides)
+	for i, vertex := range cfg.unitContainerVertices {
+		container[i] = point{x: vertex.x * side, y: vertex.y * side}
+		allPoints = append(allPoints, container[i])
+	}
+	for i := 0; i < cfg.innerPolygons; i++ {
+		polygon := make([]point, cfg.innerSides)
+		transformPolygon(values[i*3], values[i*3+1], values[i*3+2], cfg.unitPolygonVertices, polygon)
+		polygons[i] = polygon
+		allPoints = append(allPoints, polygon...)
+	}
+
+	minX, maxX, minY, maxY := bounds(allPoints)
+	spanX := maxX - minX
+	spanY := maxY - minY
+	if spanX == 0 {
+		spanX = 1
+	}
+	if spanY == 0 {
+		spanY = 1
+	}
+	plotHeight := height - titleArea - margin
+	scaleX := float64(width-2*margin) / spanX
+	scaleY := float64(plotHeight-2*margin) / spanY
+	scale := math.Min(scaleX, scaleY) * 0.95
+	centerX := (minX + maxX) / 2
+	centerY := (minY + maxY) / 2
+	screenPoint := func(p point) image.Point {
+		x := float64(width)/2 + (p.x-centerX)*scale
+		y := float64(titleArea) + float64(plotHeight)/2 - (p.y-centerY)*scale
+		return image.Point{X: int(math.Round(x)), Y: int(math.Round(y))}
+	}
+
+	containerScreen := toScreenPolygon(container, screenPoint)
+	drawPolyline(img, containerScreen, true, color.RGBA{A: 255})
+	for _, polygon := range polygons {
+		screenPolygon := toScreenPolygon(polygon, screenPoint)
+		fillPolygon(img, screenPolygon, color.RGBA{R: 204, G: 204, B: 204, A: 255})
+		drawPolyline(img, screenPolygon, true, color.RGBA{A: 255})
+	}
+
+	title := "SIDE LENGTH: " + strconv.FormatFloat(sideLength, 'g', -1, 64)
+	drawTextCentered(img, title, width/2, 12, 2, color.RGBA{A: 255})
+
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", filename, err)
+	}
+	defer file.Close()
+	if err := png.Encode(file, img); err != nil {
+		return fmt.Errorf("write %s: %w", filename, err)
+	}
+	return nil
+}
+
+func fillImage(img *image.RGBA, c color.RGBA) {
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			img.SetRGBA(x, y, c)
+		}
+	}
+}
+
+func bounds(points []point) (float64, float64, float64, float64) {
+	minX := math.Inf(1)
+	maxX := math.Inf(-1)
+	minY := math.Inf(1)
+	maxY := math.Inf(-1)
+	for _, point := range points {
+		if point.x < minX {
+			minX = point.x
+		}
+		if point.x > maxX {
+			maxX = point.x
+		}
+		if point.y < minY {
+			minY = point.y
+		}
+		if point.y > maxY {
+			maxY = point.y
+		}
+	}
+	return minX, maxX, minY, maxY
+}
+
+func toScreenPolygon(poly []point, transform func(point) image.Point) []image.Point {
+	out := make([]image.Point, len(poly))
+	for i, p := range poly {
+		out[i] = transform(p)
+	}
+	return out
+}
+
+func fillPolygon(img *image.RGBA, polygon []image.Point, c color.RGBA) {
+	if len(polygon) < 3 {
+		return
+	}
+	minY := polygon[0].Y
+	maxY := polygon[0].Y
+	for _, p := range polygon[1:] {
+		if p.Y < minY {
+			minY = p.Y
+		}
+		if p.Y > maxY {
+			maxY = p.Y
+		}
+	}
+	if minY < img.Bounds().Min.Y {
+		minY = img.Bounds().Min.Y
+	}
+	if maxY >= img.Bounds().Max.Y {
+		maxY = img.Bounds().Max.Y - 1
+	}
+
+	intersections := make([]float64, 0, len(polygon))
+	for y := minY; y <= maxY; y++ {
+		intersections = intersections[:0]
+		scanY := float64(y) + 0.5
+		for i := 0; i < len(polygon); i++ {
+			a := polygon[i]
+			b := polygon[(i+1)%len(polygon)]
+			if a.Y == b.Y {
+				continue
+			}
+			ay := float64(a.Y)
+			by := float64(b.Y)
+			if scanY < math.Min(ay, by) || scanY >= math.Max(ay, by) {
+				continue
+			}
+			t := (scanY - ay) / (by - ay)
+			x := float64(a.X) + t*float64(b.X-a.X)
+			intersections = append(intersections, x)
+		}
+		sort.Float64s(intersections)
+		for i := 0; i+1 < len(intersections); i += 2 {
+			startX := int(math.Ceil(intersections[i]))
+			endX := int(math.Floor(intersections[i+1]))
+			if startX < img.Bounds().Min.X {
+				startX = img.Bounds().Min.X
+			}
+			if endX >= img.Bounds().Max.X {
+				endX = img.Bounds().Max.X - 1
+			}
+			for x := startX; x <= endX; x++ {
+				img.SetRGBA(x, y, c)
+			}
+		}
+	}
+}
+
+func drawPolyline(img *image.RGBA, points []image.Point, closed bool, c color.RGBA) {
+	for i := 0; i+1 < len(points); i++ {
+		drawLine(img, points[i], points[i+1], c)
+	}
+	if closed && len(points) > 1 {
+		drawLine(img, points[len(points)-1], points[0], c)
+	}
+}
+
+func drawLine(img *image.RGBA, a, b image.Point, c color.RGBA) {
+	x0 := a.X
+	y0 := a.Y
+	x1 := b.X
+	y1 := b.Y
+	dx := absInt(x1 - x0)
+	dy := -absInt(y1 - y0)
+	sx := -1
+	if x0 < x1 {
+		sx = 1
+	}
+	sy := -1
+	if y0 < y1 {
+		sy = 1
+	}
+	err := dx + dy
+	for {
+		if image.Pt(x0, y0).In(img.Bounds()) {
+			img.SetRGBA(x0, y0, c)
+		}
+		if x0 == x1 && y0 == y1 {
+			break
+		}
+		e2 := 2 * err
+		if e2 >= dy {
+			err += dy
+			x0 += sx
+		}
+		if e2 <= dx {
+			err += dx
+			y0 += sy
+		}
+	}
+}
+
+func drawTextCentered(img *image.RGBA, text string, centerX, y, scale int, c color.RGBA) {
+	width := textWidth(text, scale)
+	drawText(img, centerX-width/2, y, text, scale, c)
+}
+
+func drawText(img *image.RGBA, x, y int, text string, scale int, c color.RGBA) {
+	cursor := x
+	for _, r := range text {
+		if r == ' ' {
+			cursor += 4 * scale
+			continue
+		}
+		glyph, ok := bitmapFont[r]
+		if !ok {
+			cursor += 6 * scale
+			continue
+		}
+		for row, line := range glyph {
+			for col, bit := range line {
+				if bit != '1' {
+					continue
+				}
+				for yy := 0; yy < scale; yy++ {
+					for xx := 0; xx < scale; xx++ {
+						px := cursor + col*scale + xx
+						py := y + row*scale + yy
+						if image.Pt(px, py).In(img.Bounds()) {
+							img.SetRGBA(px, py, c)
+						}
+					}
+				}
+			}
+		}
+		cursor += 6 * scale
+	}
+}
+
+func textWidth(text string, scale int) int {
+	width := 0
+	for _, r := range text {
+		if r == ' ' {
+			width += 4 * scale
+		} else {
+			width += 6 * scale
+		}
+	}
+	return width
+}
+
+var bitmapFont = map[rune][]string{
+	'A': {"01110", "10001", "10001", "11111", "10001", "10001", "10001"},
+	'D': {"11110", "10001", "10001", "10001", "10001", "10001", "11110"},
+	'E': {"11111", "10000", "10000", "11110", "10000", "10000", "11111"},
+	'G': {"01111", "10000", "10000", "10011", "10001", "10001", "01111"},
+	'H': {"10001", "10001", "10001", "11111", "10001", "10001", "10001"},
+	'I': {"11111", "00100", "00100", "00100", "00100", "00100", "11111"},
+	'L': {"10000", "10000", "10000", "10000", "10000", "10000", "11111"},
+	'N': {"10001", "11001", "10101", "10011", "10001", "10001", "10001"},
+	'S': {"01111", "10000", "10000", "01110", "00001", "00001", "11110"},
+	'T': {"11111", "00100", "00100", "00100", "00100", "00100", "00100"},
+	'0': {"01110", "10001", "10011", "10101", "11001", "10001", "01110"},
+	'1': {"00100", "01100", "00100", "00100", "00100", "00100", "01110"},
+	'2': {"01110", "10001", "00001", "00010", "00100", "01000", "11111"},
+	'3': {"11110", "00001", "00001", "01110", "00001", "00001", "11110"},
+	'4': {"00010", "00110", "01010", "10010", "11111", "00010", "00010"},
+	'5': {"11111", "10000", "10000", "11110", "00001", "00001", "11110"},
+	'6': {"01110", "10000", "10000", "11110", "10001", "10001", "01110"},
+	'7': {"11111", "00001", "00010", "00100", "01000", "01000", "01000"},
+	'8': {"01110", "10001", "10001", "01110", "10001", "10001", "01110"},
+	'9': {"01110", "10001", "10001", "01111", "00001", "00001", "01110"},
+	'.': {"00000", "00000", "00000", "00000", "00000", "01100", "01100"},
+	':': {"00000", "01100", "01100", "00000", "01100", "01100", "00000"},
+	'-': {"00000", "00000", "00000", "11111", "00000", "00000", "00000"},
+	'+': {"00000", "00100", "00100", "11111", "00100", "00100", "00000"},
+}
+
+func cloneFloat64s(values []float64) []float64 {
+	out := make([]float64, len(values))
+	copy(out, values)
+	return out
+}
+
+func scaleFloat64s(values []float64, multiplier float64) []float64 {
+	out := make([]float64, len(values))
+	for i, value := range values {
+		out[i] = value * multiplier
+	}
+	return out
+}
+
+func subtract(a, b []float64) []float64 {
+	out := make([]float64, len(a))
+	for i := range a {
+		out[i] = a[i] - b[i]
+	}
+	return out
+}
+
+func dot(a, b []float64) float64 {
+	value := 0.0
+	for i := range a {
+		value += a[i] * b[i]
+	}
+	return value
+}
+
+func axpy(dst []float64, x []float64, alpha float64) {
+	for i := range dst {
+		dst[i] += alpha * x[i]
+	}
+}
+
+func maxAbs(values []float64) float64 {
+	maxValue := 0.0
+	for _, value := range values {
+		absValue := math.Abs(value)
+		if absValue > maxValue {
+			maxValue = absValue
+		}
+	}
+	return maxValue
+}
+
+func allFinite(values []float64) bool {
+	for _, value := range values {
+		if !isFinite(value) {
+			return false
+		}
+	}
+	return true
+}
+
+func isFinite(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
