@@ -1,26 +1,26 @@
+# BUILD STAGE
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 
 ARG TARGETOS
 ARG TARGETARCH
 
-WORKDIR /src
+WORKDIR /app
+
 COPY go.mod ./
-COPY *.go ./
+RUN go mod download
+
+COPY . .
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build \
 	-ldflags="-s -w" \
 	-trimpath \
-	-o /out/polygon-packer \
-	.
+	-o polygon-packer .
 
-FROM alpine:3.20
+# FINAL STAGE
+FROM scratch
 
-RUN adduser -D -u 10001 appuser \
-	&& mkdir -p /work \
-	&& chown appuser:appuser /work
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-WORKDIR /work
-COPY --from=build /out/polygon-packer /usr/local/bin/polygon-packer
+COPY --from=build /app/polygon-packer /polygon-packer
 
-USER appuser
-ENTRYPOINT ["polygon-packer"]
+ENTRYPOINT ["/polygon-packer"]
