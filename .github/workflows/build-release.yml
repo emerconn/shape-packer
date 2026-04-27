@@ -43,26 +43,28 @@ jobs:
       with:
         go-version-file: ./go.mod
 
-    - name: Build
+    - id: build
+      name: Build
       run: |
         output=polygon-packer-${{ matrix.goos }}-${{ matrix.goarch }}
         if [ "${{ matrix.mode }}" = "debug" ]; then
           output=${output}-debug
         fi
-        CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
-          $([[ "${{ matrix.mode }}" = "slim" ]] && echo "-ldflags='-s -w' -trimpath") \
-          -o "${output}" .
         if [ "${{ matrix.goos }}" = "windows" ]; then
-          mv "${output}" "${output}.exe"
           output="${output}.exe"
         fi
-        echo "artifact=${output}" >> $GITHUB_OUTPUT
+        if [ "${{ matrix.mode }}" = "slim" ]; then
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -trimpath -o "${output}" .
+        else
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o "${output}" .
+        fi
+        echo "artifact=${output}" >> "$GITHUB_OUTPUT"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
         name: polygon-packer-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.mode == 'debug' && '-debug' || '' }}
-        path: ${{ steps.Build.outputs.artifact }}
+        path: ${{ steps.build.outputs.artifact }}
 
   container:
     runs-on: ubuntu-latest
