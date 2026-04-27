@@ -1,0 +1,103 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ '*' ]
+    paths:
+    - 'polygon_packer.go'
+    - 'go.mod'
+    - 'go.sum'
+    - '.github/workflows/build-release.yml'
+  pull_request:
+    branches: [ '*' ]
+    paths:
+    - 'polygon_packer.go'
+    - 'go.mod'
+    - 'go.sum'
+    - '.github/workflows/build-release.yml'
+  release:
+    types: [ created ]
+
+permissions:
+  contents: write
+
+jobs:
+  slim:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [ darwin, freebsd, linux, windows ]
+        goarch: [ amd64, arm64 ]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: ./go.mod
+
+    - name: Build
+      run: |
+        CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
+          -ldflags="-s -w" \
+          -trimpath \
+          -o polygon-packer-${{ matrix.goos }}-${{ matrix.goarch }} \
+          .
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          mv polygon-packer-${{ matrix.goos }}-${{ matrix.goarch }} polygon-packer-${{ matrix.goos }}-${{ matrix.goarch }}.exe
+        fi
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: polygon-packer-${{ matrix.goos }}-${{ matrix.goarch }}
+        path: polygon-packer-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}
+
+  debug:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [ darwin, freebsd, linux, windows ]
+        goarch: [ amd64, arm64 ]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: ./go.mod
+
+    - name: Build
+      run: |
+        CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
+          -o polygon-packer-${{ matrix.goos }}-${{ matrix.goarch }}-debug \
+          .
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          mv polygon-packer-${{ matrix.goos }}-${{ matrix.goarch }}-debug polygon-packer-${{ matrix.goos }}-${{ matrix.goarch }}-debug.exe
+        fi
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: polygon-packer-${{ matrix.goos }}-${{ matrix.goarch }}-debug
+        path: polygon-packer-${{ matrix.goos }}-${{ matrix.goarch }}-debug${{ matrix.goos == 'windows' && '.exe' || '' }}
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [ slim, debug ]
+    if: github.event_name == 'release'
+
+    steps:
+    - name: Download binaries
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        merge-multiple: true
+
+    - name: Upload to release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: artifacts/*
+        tag_name: ${{ github.event.release.tag_name }}
