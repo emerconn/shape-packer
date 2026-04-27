@@ -17,9 +17,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build \
 	-o polygon-packer .
 
 # FINAL STAGE
-FROM scratch
-
-COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+FROM gcr.io/distroless/static
 
 COPY --from=build /app/polygon-packer /polygon-packer
 
