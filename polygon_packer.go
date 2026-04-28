@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -85,6 +86,11 @@ func main() {
 		os.Exit(2)
 	}
 
+	outputDir := os.Getenv("OUTPUT_DIR")
+	if outputDir == "" {
+		outputDir = "."
+	}
+
 	results := runAttempts(cfg)
 	bestSide := math.Inf(1)
 	var bestValues []float64
@@ -98,7 +104,7 @@ func main() {
 	sideLength := bestSide * math.Sin(math.Pi/float64(cfg.containerSides)) / math.Sin(math.Pi/float64(cfg.innerSides))
 	fmt.Println("Final side length:", sideLength)
 
-	filename := fmt.Sprintf("%d_%d_in_%d.png", cfg.innerPolygons, cfg.innerSides, cfg.containerSides)
+	filename := filepath.Join(outputDir, fmt.Sprintf("%d_%d_in_%d.png", cfg.innerPolygons, cfg.innerSides, cfg.containerSides))
 	if err := savePlot(filename, cfg, bestSide, bestValues, sideLength); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -681,6 +687,10 @@ func basinHopping(x0 []float64, objective func([]float64) float64, rng *rand.Ran
 }
 
 func savePlot(filename string, cfg *config, side float64, values []float64, sideLength float64) error {
+	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+		return fmt.Errorf("create directory %s: %w", filepath.Dir(filename), err)
+	}
+
 	const (
 		width     = 640
 		height    = 480
