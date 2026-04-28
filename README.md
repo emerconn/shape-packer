@@ -31,6 +31,7 @@ Optional parameters:
 ### With Docker
 
 ```bash
+docker pull ghcr.io/emerconn/polygon-packer:main
 docker run --rm \
   -v "$(pwd):/work" \
   -w /work \
