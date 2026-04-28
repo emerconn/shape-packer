@@ -1,3 +1,4 @@
 *.png
 polygon-packer
 .codex
+cpu.prof*
