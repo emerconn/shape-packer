@@ -27,8 +27,23 @@ permissions:
   packages: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: ./go.mod
+
+    - name: Test
+      run: go test -v ./...
+
   binary:
     runs-on: ubuntu-latest
+    needs: [ test ]
     strategy:
       matrix:
         goos: [ darwin, linux, windows ]
