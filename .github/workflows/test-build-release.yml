@@ -70,10 +70,11 @@ jobs:
         if [ "${{ matrix.goos }}" = "windows" ]; then
           output="${output}.exe"
         fi
+        VERSION="${{ github.event.release.tag_name || github.ref_name }}"
         if [ "${{ matrix.mode }}" = "slim" ]; then
-          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -trimpath -o "${output}" .
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w -X main.version=${VERSION}" -trimpath -o "${output}" .
         else
-          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o "${output}" .
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-X main.version=${VERSION}" -o "${output}" .
         fi
         echo "artifact=${output}" >> "$GITHUB_OUTPUT"
 
@@ -134,6 +135,7 @@ jobs:
         target: ${{ matrix.mode == 'debug' && 'runtime-debug' || 'runtime-slim' }}
         build-args: |
           MODE=${{ matrix.mode }}
+          VERSION=${{ github.event.release.tag_name || github.ref_name }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
 

@@ -4,6 +4,7 @@ FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG MODE=slim
+ARG VERSION=dev
 
 WORKDIR /app
 
@@ -13,9 +14,9 @@ RUN go mod download
 COPY . .
 
 RUN if [ "$MODE" = "slim" ]; then \
-	CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-s -w" -trimpath -o polygon-packer .; \
+	CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-s -w -X main.version=${VERSION}" -trimpath -o polygon-packer .; \
 	else \
-	CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -o polygon-packer .; \
+	CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-X main.version=${VERSION}" -o polygon-packer .; \
 	fi
 
 # SLIM RUNTIME

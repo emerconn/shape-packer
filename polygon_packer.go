@@ -35,7 +35,10 @@ const (
 	basinHoppingStepSize   = 0.1
 )
 
-var errHelp = errors.New("help requested")
+var (
+	errHelp = errors.New("help requested")
+	version = "dev"
+)
 
 type point struct {
 	x float64
@@ -304,7 +307,7 @@ func shouldStartCloudProfiler(enabledByFlag bool) bool {
 func startCloudProfiler() error {
 	cfg := profiler.Config{
 		Service:        cloudProfilerService(),
-		ServiceVersion: os.Getenv("CLOUD_PROFILER_VERSION"),
+		ServiceVersion: version,
 		DebugLogging:   boolEnv("CLOUD_PROFILER_DEBUG"),
 		MutexProfiling: boolEnv("CLOUD_PROFILER_MUTEX"),
 		ProjectID:      os.Getenv("CLOUD_PROFILER_PROJECT_ID"),
