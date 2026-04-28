@@ -3,11 +3,12 @@ package main
 import (
 	"math"
 	"math/rand"
+	"os"
 	"testing"
 )
 
 func TestParseArgsAllowsOptionsAfterPositionals(t *testing.T) {
-	cfg, err := parseArgs([]string{"3", "4", "6", "--attempts", "7", "--tolerance=1e-6", "--finalstep", "0.001", "--cpuprofile"})
+	cfg, err := parseArgs([]string{"3", "4", "6", "--attempts", "7", "--tolerance=1e-6", "--finalstep", "0.001", "--cpuprofile", "--cloudprofiler"})
 	if err != nil {
 		t.Fatalf("parseArgs returned error: %v", err)
 	}
@@ -25,6 +26,64 @@ func TestParseArgsAllowsOptionsAfterPositionals(t *testing.T) {
 	}
 	if !cfg.cpuProfile {
 		t.Fatalf("cpuProfile = false, want true")
+	}
+	if !cfg.cloudProfiler {
+		t.Fatalf("cloudProfiler = false, want true")
+	}
+}
+
+func TestShouldStartCloudProfiler(t *testing.T) {
+	unsetEnv(t, "CLOUD_PROFILER_ENABLED", "CLOUD_RUN_JOB", "K_SERVICE")
+	if !shouldStartCloudProfiler(true) {
+		t.Fatalf("shouldStartCloudProfiler(true) = false, want true")
+	}
+	if shouldStartCloudProfiler(false) {
+		t.Fatalf("shouldStartCloudProfiler(false) = true, want false")
+	}
+
+	t.Setenv("CLOUD_RUN_JOB", "polygon-packer-job")
+	if !shouldStartCloudProfiler(false) {
+		t.Fatalf("shouldStartCloudProfiler(false) with CLOUD_RUN_JOB = false, want true")
+	}
+
+	t.Setenv("CLOUD_PROFILER_ENABLED", "false")
+	if shouldStartCloudProfiler(true) {
+		t.Fatalf("shouldStartCloudProfiler(true) with CLOUD_PROFILER_ENABLED=false = true, want false")
+	}
+}
+
+func TestCloudProfilerServicePrefersStableCloudRunJobName(t *testing.T) {
+	unsetEnv(t, "CLOUD_PROFILER_SERVICE", "CLOUD_RUN_JOB", "K_SERVICE")
+	t.Setenv("CLOUD_RUN_JOB", "polygon-packer-job")
+	t.Setenv("K_SERVICE", "polygon-packer-service")
+	if got := cloudProfilerService(); got != "polygon-packer-job" {
+		t.Fatalf("cloudProfilerService() = %q, want %q", got, "polygon-packer-job")
+	}
+
+	t.Setenv("CLOUD_PROFILER_SERVICE", "custom-packer")
+	if got := cloudProfilerService(); got != "custom-packer" {
+		t.Fatalf("cloudProfilerService() = %q, want %q", got, "custom-packer")
+	}
+}
+
+func unsetEnv(t *testing.T, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		previous, ok := os.LookupEnv(name)
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatalf("unset %s: %v", name, err)
+		}
+		t.Cleanup(func() {
+			if ok {
+				if err := os.Setenv(name, previous); err != nil {
+					t.Fatalf("restore %s: %v", name, err)
+				}
+				return
+			}
+			if err := os.Unsetenv(name); err != nil {
+				t.Fatalf("restore unset %s: %v", name, err)
+			}
+		})
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cloud.google.com/go/profiler"
 	"errors"
 	"fmt"
 	"image"
@@ -49,6 +50,7 @@ type config struct {
 	penaltyTolerance float64
 	finalStepSize    float64
 	cpuProfile       bool
+	cloudProfiler    bool
 
 	unitPolygonVertices   []point
 	unitPolygonVectors    []point
@@ -93,6 +95,14 @@ func main() {
 	outputDir := os.Getenv("OUTPUT_DIR")
 	if outputDir == "" {
 		outputDir = "."
+	}
+
+	if shouldStartCloudProfiler(cfg.cloudProfiler) {
+		if cfg.cpuProfile {
+			fmt.Fprintln(os.Stderr, "Cloud Profiler disabled because --cpuprofile is enabled")
+		} else if err := startCloudProfiler(); err != nil {
+			fmt.Fprintln(os.Stderr, "Cloud Profiler disabled:", err)
+		}
 	}
 
 	var stopCPUProfile func() error
@@ -147,6 +157,7 @@ func parseArgs(args []string) (*config, error) {
 	tolerance := defaultPenaltyTolerance
 	finalStep := defaultFinalStepSize
 	cpuProfile := false
+	cloudProfiler := false
 	positional := make([]string, 0, 3)
 
 	for i := 0; i < len(args); i++ {
@@ -156,6 +167,8 @@ func parseArgs(args []string) (*config, error) {
 			return nil, errHelp
 		case arg == "--cpuprofile":
 			cpuProfile = true
+		case arg == "--cloudprofiler":
+			cloudProfiler = true
 		case arg == "--attempts":
 			i++
 			if i >= len(args) {
@@ -257,6 +270,7 @@ func parseArgs(args []string) (*config, error) {
 		penaltyTolerance: tolerance,
 		finalStepSize:    finalStep,
 		cpuProfile:       cpuProfile,
+		cloudProfiler:    cloudProfiler,
 	}
 	cfg.precompute()
 	return cfg, nil
@@ -264,7 +278,7 @@ func parseArgs(args []string) (*config, error) {
 
 func usage() string {
 	return `Usage:
-  polygon_packer inner_polygons inner_sides container_sides [--attempts N] [--tolerance F] [--finalstep F] [--cpuprofile]
+  polygon_packer inner_polygons inner_sides container_sides [--attempts N] [--tolerance F] [--finalstep F] [--cpuprofile] [--cloudprofiler]
 
 Arguments:
   inner_polygons   Number of inner polygons
@@ -276,7 +290,60 @@ Options:
   --tolerance F    Overlap penalty tolerance (default 1e-8)
   --finalstep F    Smallest theoretical container-size shrink step (default 0.0001)
   --cpuprofile     Write a cpu.prof profile next to the output image
+  --cloudprofiler  Send profiles to Google Cloud Profiler
 `
+}
+
+func shouldStartCloudProfiler(enabledByFlag bool) bool {
+	if value, ok := lookupBoolEnv("CLOUD_PROFILER_ENABLED"); ok {
+		return value
+	}
+	return enabledByFlag || os.Getenv("CLOUD_RUN_JOB") != "" || os.Getenv("K_SERVICE") != ""
+}
+
+func startCloudProfiler() error {
+	cfg := profiler.Config{
+		Service:        cloudProfilerService(),
+		ServiceVersion: os.Getenv("CLOUD_PROFILER_VERSION"),
+		DebugLogging:   boolEnv("CLOUD_PROFILER_DEBUG"),
+		MutexProfiling: boolEnv("CLOUD_PROFILER_MUTEX"),
+		ProjectID:      os.Getenv("CLOUD_PROFILER_PROJECT_ID"),
+	}
+	return profiler.Start(cfg)
+}
+
+func cloudProfilerService() string {
+	for _, name := range []string{
+		os.Getenv("CLOUD_PROFILER_SERVICE"),
+		os.Getenv("CLOUD_RUN_JOB"),
+		os.Getenv("K_SERVICE"),
+		"polygon-packer",
+	} {
+		if name != "" {
+			return name
+		}
+	}
+	return "polygon-packer"
+}
+
+func boolEnv(name string) bool {
+	value, _ := lookupBoolEnv(name)
+	return value
+}
+
+func lookupBoolEnv(name string) (bool, bool) {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return false, false
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "t", "yes", "y", "on":
+		return true, true
+	case "0", "false", "f", "no", "n", "off", "":
+		return false, true
+	default:
+		return false, true
+	}
 }
 
 func uniqueFilename(base string) string {

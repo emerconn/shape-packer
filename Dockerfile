@@ -25,6 +25,6 @@ ENTRYPOINT ["/polygon-packer"]
 
 # DEBUG RUNTIME
 FROM alpine:3.23 AS runtime-debug
-RUN apk add --no-cache bash
+RUN apk add --no-cache bash ca-certificates
 COPY --from=build /app/polygon-packer /polygon-packer
 ENTRYPOINT ["/polygon-packer"]
