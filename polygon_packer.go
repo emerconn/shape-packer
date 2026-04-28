@@ -135,6 +135,7 @@ func main() {
 	fmt.Println("Final side length:", sideLength)
 
 	filename := filepath.Join(outputDir, fmt.Sprintf("%d_%d_in_%d.png", cfg.innerPolygons, cfg.innerSides, cfg.containerSides))
+	filename = uniqueFilename(filename)
 	if err := savePlot(filename, cfg, bestSide, bestValues, sideLength); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -276,6 +277,20 @@ Options:
   --finalstep F    Smallest theoretical container-size shrink step (default 0.0001)
   --cpuprofile     Write a cpu.prof profile next to the output image
 `
+}
+
+func uniqueFilename(base string) string {
+	if _, err := os.Stat(base); os.IsNotExist(err) {
+		return base
+	}
+	ext := filepath.Ext(base)
+	name := strings.TrimSuffix(base, ext)
+	for i := 1; ; i++ {
+		candidate := fmt.Sprintf("%s_%d%s", name, i, ext)
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate
+		}
+	}
 }
 
 func startCPUProfile(filename string) (func() error, error) {
