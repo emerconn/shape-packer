@@ -860,14 +860,16 @@ func savePlot(filename string, cfg *config, side float64, values []float64, side
 
 	polygons := make([][]point, cfg.innerPolygons)
 	allPoints := make([]point, 0, cfg.containerSides+cfg.innerPolygons*cfg.innerSides)
+	plotCos, plotSin := plotRotation(cfg.containerSides)
 	container := make([]point, cfg.containerSides)
 	for i, vertex := range cfg.unitContainerVertices {
-		container[i] = point{x: vertex.x * side, y: vertex.y * side}
+		container[i] = rotatePoint(point{x: vertex.x * side, y: vertex.y * side}, plotCos, plotSin)
 		allPoints = append(allPoints, container[i])
 	}
 	for i := 0; i < cfg.innerPolygons; i++ {
 		polygon := make([]point, cfg.innerSides)
 		transformPolygon(values[i*3], values[i*3+1], values[i*3+2], cfg.unitPolygonVertices, polygon)
+		rotatePoints(polygon, plotCos, plotSin)
 		polygons[i] = polygon
 		allPoints = append(allPoints, polygon...)
 	}
@@ -913,6 +915,24 @@ func savePlot(filename string, cfg *config, side float64, values []float64, side
 		return fmt.Errorf("write %s: %w", filename, err)
 	}
 	return nil
+}
+
+func plotRotation(containerSides int) (float64, float64) {
+	angle := math.Pi/2 - math.Pi/float64(containerSides)
+	return math.Cos(angle), math.Sin(angle)
+}
+
+func rotatePoints(points []point, cosAngle, sinAngle float64) {
+	for i, p := range points {
+		points[i] = rotatePoint(p, cosAngle, sinAngle)
+	}
+}
+
+func rotatePoint(p point, cosAngle, sinAngle float64) point {
+	return point{
+		x: p.x*cosAngle - p.y*sinAngle,
+		y: p.x*sinAngle + p.y*cosAngle,
+	}
 }
 
 func fillImage(img *image.RGBA, c color.RGBA) {
