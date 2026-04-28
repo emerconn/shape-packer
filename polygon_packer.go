@@ -24,6 +24,7 @@ const (
 	defaultAttempts         = 1000
 	defaultPenaltyTolerance = 1e-8
 	defaultFinalStepSize    = 0.0001
+	cloudProfilerService    = "polygon-packer"
 
 	lbfgsHistorySize       = 10
 	lbfgsMaxIterations     = 1000
@@ -307,20 +308,13 @@ func shouldStartCloudProfiler(enabledByFlag bool) bool {
 
 func startCloudProfiler() error {
 	cfg := profiler.Config{
-		Service:        cloudProfilerService(),
+		Service:        cloudProfilerService,
 		ServiceVersion: version,
 		DebugLogging:   boolEnv("CLOUD_PROFILER_DEBUG"),
 		MutexProfiling: boolEnv("CLOUD_PROFILER_MUTEX"),
 		ProjectID:      os.Getenv("CLOUD_PROFILER_PROJECT_ID"),
 	}
 	return profiler.Start(cfg)
-}
-
-func cloudProfilerService() string {
-	if name := os.Getenv("CLOUD_PROFILER_SERVICE"); name != "" {
-		return name
-	}
-	return "polygon-packer"
 }
 
 func boolEnv(name string) bool {

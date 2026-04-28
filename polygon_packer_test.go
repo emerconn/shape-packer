@@ -52,20 +52,6 @@ func TestShouldStartCloudProfiler(t *testing.T) {
 	}
 }
 
-func TestCloudProfilerServiceDefaultsToApplicationName(t *testing.T) {
-	unsetEnv(t, "CLOUD_PROFILER_SERVICE", "CLOUD_RUN_JOB", "K_SERVICE")
-	t.Setenv("CLOUD_RUN_JOB", "polygon-packer-job")
-	t.Setenv("K_SERVICE", "polygon-packer-service")
-	if got := cloudProfilerService(); got != "polygon-packer" {
-		t.Fatalf("cloudProfilerService() = %q, want %q", got, "polygon-packer")
-	}
-
-	t.Setenv("CLOUD_PROFILER_SERVICE", "custom-packer")
-	if got := cloudProfilerService(); got != "custom-packer" {
-		t.Fatalf("cloudProfilerService() = %q, want %q", got, "custom-packer")
-	}
-}
-
 func unsetEnv(t *testing.T, names ...string) {
 	t.Helper()
 	for _, name := range names {
