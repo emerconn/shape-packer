@@ -317,15 +317,8 @@ func startCloudProfiler() error {
 }
 
 func cloudProfilerService() string {
-	for _, name := range []string{
-		os.Getenv("CLOUD_PROFILER_SERVICE"),
-		os.Getenv("CLOUD_RUN_JOB"),
-		os.Getenv("K_SERVICE"),
-		"polygon-packer",
-	} {
-		if name != "" {
-			return name
-		}
+	if name := os.Getenv("CLOUD_PROFILER_SERVICE"); name != "" {
+		return name
 	}
 	return "polygon-packer"
 }

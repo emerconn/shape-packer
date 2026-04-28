@@ -58,7 +58,7 @@ Cloud Profiler is enabled automatically in Cloud Run jobs because Cloud Run sets
 Useful environment variables:
 
 - `CLOUD_PROFILER_ENABLED=false`: disable Cloud Profiler even on Cloud Run.
-- `CLOUD_PROFILER_SERVICE=polygon-packer`: override the profiler service name. Defaults to `CLOUD_RUN_JOB`, then `K_SERVICE`, then `polygon-packer`.
+- `CLOUD_PROFILER_SERVICE=polygon-packer`: override the profiler service name. Defaults to `polygon-packer`, so separate Cloud Run jobs using this image are grouped under one profiler service.
 - `CLOUD_PROFILER_VERSION=...`: optionally tag profiles with a deployment version.
 - `CLOUD_PROFILER_PROJECT_ID=...`: required only when running outside Google Cloud.
 - `CLOUD_PROFILER_MUTEX=true`: enable mutex contention profiling.
