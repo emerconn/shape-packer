@@ -50,6 +50,8 @@ type config struct {
 
 	unitPolygonVertices   []point
 	unitPolygonVectors    []point
+	unitPolygonAxisMin    float64
+	unitPolygonAxisMax    float64
 	unitContainerVertices []point
 	unitContainerVectors  []point
 	unitContainerApothem  float64
@@ -252,6 +254,11 @@ func (cfg *config) precompute() {
 		vectorAngle := angle + math.Pi/float64(cfg.innerSides)
 		cfg.unitPolygonVectors[i] = point{x: math.Cos(vectorAngle), y: math.Sin(vectorAngle)}
 	}
+	cfg.unitPolygonAxisMin, cfg.unitPolygonAxisMax = projectPolygon(
+		cfg.unitPolygonVertices,
+		cfg.unitPolygonVectors[0].x,
+		cfg.unitPolygonVectors[0].y,
+	)
 
 	cfg.unitContainerVertices = make([]point, cfg.containerSides)
 	cfg.unitContainerVectors = make([]point, cfg.containerSides)
@@ -388,41 +395,96 @@ func linspace(start, stop float64, count int) []float64 {
 
 func (e *evaluator) value(values []float64, side float64) float64 {
 	cfg := e.cfg
+	innerSides := cfg.innerSides
+	containerLimit := cfg.unitContainerApothem * side
 	penalty := 0.0
 	for i := 0; i < cfg.innerPolygons; i++ {
-		posX := values[i*3]
-		posY := values[i*3+1]
-		rotation := values[i*3+2]
-		polygon := e.polys[i*cfg.innerSides : (i+1)*cfg.innerSides]
-		vectors := e.vectors[i*cfg.innerSides : (i+1)*cfg.innerSides]
-		transformPolygon(posX, posY, rotation, cfg.unitPolygonVertices, polygon)
-		rotateVectors(rotation, cfg.unitPolygonVectors, vectors)
-		penalty += e.pokingPenalty(polygon, side)
+		base := i * innerSides
+		valueBase := i * 3
+		polygon := e.polys[base : base+innerSides]
+		vectors := e.vectors[base : base+innerSides]
+		penalty += transformPolygonAndVectors(
+			values[valueBase],
+			values[valueBase+1],
+			values[valueBase+2],
+			cfg.unitPolygonVertices,
+			cfg.unitPolygonVectors,
+			cfg.unitContainerVectors,
+			containerLimit,
+			polygon,
+			vectors,
+		)
 	}
 
 	for i := 0; i < cfg.innerPolygons; i++ {
-		polygonI := e.polys[i*cfg.innerSides : (i+1)*cfg.innerSides]
-		vectorsI := e.vectors[i*cfg.innerSides : (i+1)*cfg.innerSides]
+		valueBaseI := i * 3
+		centerIX := values[valueBaseI]
+		centerIY := values[valueBaseI+1]
+		baseI := i * innerSides
+		polygonI := e.polys[baseI : baseI+innerSides]
+		vectorsI := e.vectors[baseI : baseI+innerSides]
 		for j := i + 1; j < cfg.innerPolygons; j++ {
-			polygonJ := e.polys[j*cfg.innerSides : (j+1)*cfg.innerSides]
-			vectorsJ := e.vectors[j*cfg.innerSides : (j+1)*cfg.innerSides]
+			valueBaseJ := j * 3
+			centerJX := values[valueBaseJ]
+			centerJY := values[valueBaseJ+1]
+			dx := centerIX - centerJX
+			dy := centerIY - centerJY
+			if dx*dx+dy*dy >= 4 {
+				continue
+			}
+
+			baseJ := j * innerSides
+			polygonJ := e.polys[baseJ : baseJ+innerSides]
+			vectorsJ := e.vectors[baseJ : baseJ+innerSides]
 			collision := true
 			minOverlap := 1e20
 
-			for axis := 0; axis < cfg.innerSides*2; axis++ {
-				var axisX, axisY float64
-				if axis < cfg.innerSides {
-					axisX = vectorsI[axis].x
-					axisY = vectorsI[axis].y
-				} else {
-					vector := vectorsJ[axis-cfg.innerSides]
-					axisX = vector.x
-					axisY = vector.y
+			// For congruent regular polygons, projection width is constant across
+			// another polygon's axis family; only the center projection changes.
+			firstVectorI := vectorsI[0]
+			firstCenterProjectionJ := centerJX*firstVectorI.x + centerJY*firstVectorI.y
+			firstMinJ, firstMaxJ := projectPolygon(polygonJ, firstVectorI.x, firstVectorI.y)
+			axisIMinJ := firstMinJ - firstCenterProjectionJ
+			axisIMaxJ := firstMaxJ - firstCenterProjectionJ
+			for axis := 0; axis < innerSides; axis++ {
+				vector := vectorsI[axis]
+				axisX := vector.x
+				axisY := vector.y
+				centerProjection := centerIX*axisX + centerIY*axisY
+				minI := centerProjection + cfg.unitPolygonAxisMin
+				maxI := centerProjection + cfg.unitPolygonAxisMax
+				centerProjectionJ := centerJX*axisX + centerJY*axisY
+				minJ := centerProjectionJ + axisIMinJ
+				maxJ := centerProjectionJ + axisIMaxJ
+				overlap := intervalOverlap(minI, maxI, minJ, maxJ)
+				if overlap <= 0 {
+					collision = false
+					break
 				}
+				if overlap < minOverlap {
+					minOverlap = overlap
+				}
+			}
+			if !collision {
+				continue
+			}
 
-				minI, maxI := projectPolygon(polygonI, axisX, axisY)
-				minJ, maxJ := projectPolygon(polygonJ, axisX, axisY)
-				overlap := math.Min(maxI, maxJ) - math.Max(minI, minJ)
+			firstVectorJ := vectorsJ[0]
+			firstCenterProjectionI := centerIX*firstVectorJ.x + centerIY*firstVectorJ.y
+			firstMinI, firstMaxI := projectPolygon(polygonI, firstVectorJ.x, firstVectorJ.y)
+			axisJMinI := firstMinI - firstCenterProjectionI
+			axisJMaxI := firstMaxI - firstCenterProjectionI
+			for axis := 0; axis < innerSides; axis++ {
+				vector := vectorsJ[axis]
+				axisX := vector.x
+				axisY := vector.y
+				centerProjectionI := centerIX*axisX + centerIY*axisY
+				minI := centerProjectionI + axisJMinI
+				maxI := centerProjectionI + axisJMaxI
+				centerProjection := centerJX*axisX + centerJY*axisY
+				minJ := centerProjection + cfg.unitPolygonAxisMin
+				maxJ := centerProjection + cfg.unitPolygonAxisMax
+				overlap := intervalOverlap(minI, maxI, minJ, maxJ)
 				if overlap <= 0 {
 					collision = false
 					break
@@ -435,6 +497,35 @@ func (e *evaluator) value(values []float64, side float64) float64 {
 			if collision {
 				penalty += minOverlap * minOverlap
 			}
+		}
+	}
+
+	return penalty
+}
+
+func transformPolygonAndVectors(x, y, angle float64, vertices, baseVectors, containerVectors []point, containerLimit float64, polygonOut, vectorOut []point) float64 {
+	cosAngle := math.Cos(angle)
+	sinAngle := math.Sin(angle)
+	penalty := 0.0
+
+	for i := range vertices {
+		vertex := vertices[i]
+		polygonX := x + (vertex.x*cosAngle - vertex.y*sinAngle)
+		polygonY := y + (vertex.x*sinAngle + vertex.y*cosAngle)
+		polygonOut[i] = point{x: polygonX, y: polygonY}
+
+		for _, vector := range containerVectors {
+			distance := polygonX*vector.x + polygonY*vector.y
+			if distance > containerLimit {
+				diff := distance - containerLimit
+				penalty += diff * diff
+			}
+		}
+
+		baseVector := baseVectors[i]
+		vectorOut[i] = point{
+			x: baseVector.x*cosAngle - baseVector.y*sinAngle,
+			y: baseVector.x*sinAngle + baseVector.y*cosAngle,
 		}
 	}
 
@@ -463,25 +554,13 @@ func rotateVectors(angle float64, vectors []point, out []point) {
 	}
 }
 
-func (e *evaluator) pokingPenalty(vertices []point, side float64) float64 {
-	penalty := 0.0
-	limit := e.cfg.unitContainerApothem * side
-	for _, vertex := range vertices {
-		for _, vector := range e.cfg.unitContainerVectors {
-			distance := vertex.x*vector.x + vertex.y*vector.y
-			if distance > limit {
-				diff := distance - limit
-				penalty += diff * diff
-			}
-		}
-	}
-	return penalty
-}
-
 func projectPolygon(vertices []point, axisX, axisY float64) (float64, float64) {
-	minValue := 1e20
-	maxValue := -1e20
-	for _, vertex := range vertices {
+	first := vertices[0]
+	firstDot := first.x*axisX + first.y*axisY
+	minValue := firstDot
+	maxValue := firstDot
+	for i := 1; i < len(vertices); i++ {
+		vertex := vertices[i]
 		dot := vertex.x*axisX + vertex.y*axisY
 		if dot < minValue {
 			minValue = dot
@@ -491,6 +570,18 @@ func projectPolygon(vertices []point, axisX, axisY float64) (float64, float64) {
 		}
 	}
 	return minValue, maxValue
+}
+
+func intervalOverlap(minA, maxA, minB, maxB float64) float64 {
+	upper := maxA
+	if maxB < upper {
+		upper = maxB
+	}
+	lower := minA
+	if minB > lower {
+		lower = minB
+	}
+	return upper - lower
 }
 
 func minimizeLBFGS(x0 []float64, objective func([]float64) float64, tol float64) optResult {
@@ -624,7 +715,7 @@ func lineSearch(objective func([]float64) float64, x []float64, f0 float64, grad
 	step := 1.0
 	evals := 0
 	trial := make([]float64, len(x))
-	bestX := cloneFloat64s(x)
+	var bestX []float64
 	bestFun := f0
 	improved := false
 
@@ -636,12 +727,15 @@ func lineSearch(objective func([]float64) float64, x []float64, f0 float64, grad
 		evals++
 		if isFinite(trialFun) {
 			if trialFun < bestFun {
+				if bestX == nil {
+					bestX = make([]float64, len(x))
+				}
 				copy(bestX, trial)
 				bestFun = trialFun
 				improved = true
 			}
 			if trialFun <= f0+armijo*step*derivative {
-				return cloneFloat64s(trial), trialFun, evals, true
+				return trial, trialFun, evals, true
 			}
 		}
 		step *= 0.5

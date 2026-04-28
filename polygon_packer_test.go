@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"math"
+	"math/rand"
+	"testing"
+)
 
 func TestParseArgsAllowsOptionsAfterPositionals(t *testing.T) {
 	cfg, err := parseArgs([]string{"3", "4", "6", "--attempts", "7", "--tolerance=1e-6", "--finalstep", "0.001"})
@@ -42,5 +46,146 @@ func TestPenaltyIsPositiveForOverlappingPolygons(t *testing.T) {
 	values := []float64{0, 0, 0, 0, 0, 0}
 	if penalty := eval.value(values, 5); penalty <= 0 {
 		t.Fatalf("penalty = %g, want positive", penalty)
+	}
+}
+
+func TestOptimizedPenaltyMatchesBruteForceReference(t *testing.T) {
+	cases := [][]string{
+		{"3", "3", "4", "--attempts", "1"},
+		{"4", "5", "6", "--attempts", "1"},
+		{"5", "6", "8", "--attempts", "1"},
+	}
+	rng := rand.New(rand.NewSource(1))
+
+	for _, args := range cases {
+		cfg, err := parseArgs(args)
+		if err != nil {
+			t.Fatalf("parseArgs(%v) returned error: %v", args, err)
+		}
+		eval := newEvaluator(cfg)
+
+		for trial := 0; trial < 30; trial++ {
+			values := make([]float64, cfg.innerPolygons*3)
+			for i := 0; i < cfg.innerPolygons; i++ {
+				values[i*3] = rng.Float64()*6 - 3
+				values[i*3+1] = rng.Float64()*6 - 3
+				values[i*3+2] = rng.Float64() * 2 * math.Pi
+			}
+
+			side := 1.5 + rng.Float64()*4
+			got := eval.value(values, side)
+			want := bruteForcePenalty(cfg, values, side)
+			diff := math.Abs(got - want)
+			tolerance := 1e-9 * (1 + math.Max(math.Abs(got), math.Abs(want)))
+			if diff > tolerance {
+				t.Fatalf("penalty mismatch for args %v trial %d: got %g, want %g, diff %g", args, trial, got, want, diff)
+			}
+		}
+	}
+}
+
+func bruteForcePenalty(cfg *config, values []float64, side float64) float64 {
+	polys := make([]point, cfg.innerPolygons*cfg.innerSides)
+	vectors := make([]point, cfg.innerPolygons*cfg.innerSides)
+	penalty := 0.0
+
+	for i := 0; i < cfg.innerPolygons; i++ {
+		polygon := polys[i*cfg.innerSides : (i+1)*cfg.innerSides]
+		polygonVectors := vectors[i*cfg.innerSides : (i+1)*cfg.innerSides]
+		transformPolygon(values[i*3], values[i*3+1], values[i*3+2], cfg.unitPolygonVertices, polygon)
+		rotateVectors(values[i*3+2], cfg.unitPolygonVectors, polygonVectors)
+
+		limit := cfg.unitContainerApothem * side
+		for _, vertex := range polygon {
+			for _, vector := range cfg.unitContainerVectors {
+				distance := vertex.x*vector.x + vertex.y*vector.y
+				if distance > limit {
+					diff := distance - limit
+					penalty += diff * diff
+				}
+			}
+		}
+	}
+
+	for i := 0; i < cfg.innerPolygons; i++ {
+		polygonI := polys[i*cfg.innerSides : (i+1)*cfg.innerSides]
+		vectorsI := vectors[i*cfg.innerSides : (i+1)*cfg.innerSides]
+		for j := i + 1; j < cfg.innerPolygons; j++ {
+			polygonJ := polys[j*cfg.innerSides : (j+1)*cfg.innerSides]
+			vectorsJ := vectors[j*cfg.innerSides : (j+1)*cfg.innerSides]
+			collision := true
+			minOverlap := 1e20
+
+			for axis := 0; axis < cfg.innerSides*2; axis++ {
+				var axisX, axisY float64
+				if axis < cfg.innerSides {
+					axisX = vectorsI[axis].x
+					axisY = vectorsI[axis].y
+				} else {
+					vector := vectorsJ[axis-cfg.innerSides]
+					axisX = vector.x
+					axisY = vector.y
+				}
+
+				minI, maxI := bruteProjectPolygon(polygonI, axisX, axisY)
+				minJ, maxJ := bruteProjectPolygon(polygonJ, axisX, axisY)
+				overlap := math.Min(maxI, maxJ) - math.Max(minI, minJ)
+				if overlap <= 0 {
+					collision = false
+					break
+				}
+				if overlap < minOverlap {
+					minOverlap = overlap
+				}
+			}
+
+			if collision {
+				penalty += minOverlap * minOverlap
+			}
+		}
+	}
+
+	return penalty
+}
+
+func bruteProjectPolygon(vertices []point, axisX, axisY float64) (float64, float64) {
+	minValue := 1e20
+	maxValue := -1e20
+	for _, vertex := range vertices {
+		dot := vertex.x*axisX + vertex.y*axisY
+		if dot < minValue {
+			minValue = dot
+		}
+		if dot > maxValue {
+			maxValue = dot
+		}
+	}
+	return minValue, maxValue
+}
+
+var benchmarkPenalty float64
+
+func BenchmarkEvaluatorValue(b *testing.B) {
+	cfg, err := parseArgs([]string{"8", "6", "8", "--attempts", "1"})
+	if err != nil {
+		b.Fatalf("parseArgs returned error: %v", err)
+	}
+	values := []float64{
+		-1.8, -1.4, 0.1,
+		0.1, -1.3, 0.7,
+		1.6, -1.2, 1.2,
+		-1.2, 0.2, 2.1,
+		0.7, 0.1, 2.8,
+		2.0, 0.4, 3.4,
+		-0.4, 1.6, 4.1,
+		1.5, 1.7, 5.2,
+	}
+	eval := newEvaluator(cfg)
+	side := 4.2
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchmarkPenalty = eval.value(values, side)
 	}
 }
