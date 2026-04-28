@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cloud.google.com/go/profiler"
 	"errors"
 	"fmt"
 	"image"
@@ -17,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"cloud.google.com/go/profiler"
 )
 
 const (
