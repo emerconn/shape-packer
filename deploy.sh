@@ -5,11 +5,11 @@
 # ==========================================
 PROJECT_ID="basic-bison-138323"
 REGION="us-central1"
-IMAGE="us-central1-docker.pkg.dev/basic-bison-138323/ghcr-proxy/emerconn/polygon-packer:v0.0.8"
+IMAGE="us-central1-docker.pkg.dev/basic-bison-138323/ghcr-proxy/emerconn/polygon-packer:v0.0.15"
 SERVICE_ACCOUNT="817010668749-compute@developer.gserviceaccount.com"
 
-ARG2="3"
-ARG3="6"
+ARG2="4"
+ARG3="3"
 
 gcloud config set project "${PROJECT_ID}"
 
@@ -70,10 +70,11 @@ EOF
       rm temp-job.yaml
       exit 1
   fi
+  sleep 2
 
   # 3. Execute asynchronously
-  echo "Starting execution for $JOB_NAME..."
   gcloud run jobs execute "${JOB_NAME}" --region="${REGION}" --async
+  sleep 2
 
   echo ""
 done
