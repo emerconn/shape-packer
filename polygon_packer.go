@@ -922,10 +922,11 @@ func savePlot(filename string, cfg *config, side float64, values []float64, side
 	}
 
 	const (
-		width     = 640
-		height    = 480
-		titleArea = 40
-		margin    = 24
+		outputScale = 6
+		width       = 640 * outputScale
+		height      = 480 * outputScale
+		titleArea   = 40 * outputScale
+		margin      = 24 * outputScale
 	)
 
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
@@ -977,7 +978,7 @@ func savePlot(filename string, cfg *config, side float64, values []float64, side
 	}
 
 	title := "SIDE LENGTH: " + strconv.FormatFloat(sideLength, 'g', -1, 64)
-	drawTextCentered(img, title, width/2, 12, 2, color.RGBA{A: 255})
+	drawTextCentered(img, title, width/2, 12*outputScale, 2*outputScale, color.RGBA{A: 255})
 
 	file, err := os.Create(filename)
 	if err != nil {
