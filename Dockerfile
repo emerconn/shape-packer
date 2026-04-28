@@ -3,7 +3,6 @@ FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 
 ARG TARGETOS
 ARG TARGETARCH
-ARG MODE=slim
 ARG VERSION=dev
 
 WORKDIR /app
@@ -13,19 +12,16 @@ RUN go mod download
 
 COPY . .
 
-RUN if [ "$MODE" = "slim" ]; then \
-	CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-s -w -X main.version=${VERSION}" -trimpath -o polygon-packer .; \
-	else \
-	CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-X main.version=${VERSION}" -o polygon-packer .; \
-	fi
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-s -w -X main.version=${VERSION}" -trimpath -o polygon-packer-slim .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-X main.version=${VERSION}" -o polygon-packer-debug .
+
 
 # SLIM RUNTIME
 FROM gcr.io/distroless/static AS runtime-slim
-COPY --from=build /app/polygon-packer /polygon-packer
+COPY --from=build /app/polygon-packer-slim /polygon-packer
 ENTRYPOINT ["/polygon-packer"]
 
 # DEBUG RUNTIME
-FROM alpine:3.23 AS runtime-debug
-RUN apk add --no-cache bash ca-certificates
-COPY --from=build /app/polygon-packer /polygon-packer
+FROM gcr.io/distroless/static AS runtime-debug
+COPY --from=build /app/polygon-packer-debug /polygon-packer
 ENTRYPOINT ["/polygon-packer"]
