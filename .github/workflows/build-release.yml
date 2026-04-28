@@ -134,5 +134,5 @@ jobs:
     - name: Upload to release
       uses: softprops/action-gh-release@v3
       with:
-        files: artifacts/*
+        files: artifacts/polygon-packer*
         tag_name: ${{ github.event.release.tag_name }}
