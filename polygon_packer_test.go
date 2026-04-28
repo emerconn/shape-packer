@@ -7,7 +7,7 @@ import (
 )
 
 func TestParseArgsAllowsOptionsAfterPositionals(t *testing.T) {
-	cfg, err := parseArgs([]string{"3", "4", "6", "--attempts", "7", "--tolerance=1e-6", "--finalstep", "0.001"})
+	cfg, err := parseArgs([]string{"3", "4", "6", "--attempts", "7", "--tolerance=1e-6", "--finalstep", "0.001", "--cpuprofile"})
 	if err != nil {
 		t.Fatalf("parseArgs returned error: %v", err)
 	}
@@ -22,6 +22,9 @@ func TestParseArgsAllowsOptionsAfterPositionals(t *testing.T) {
 	}
 	if cfg.finalStepSize != 0.001 {
 		t.Fatalf("finalstep = %g, want 0.001", cfg.finalStepSize)
+	}
+	if !cfg.cpuProfile {
+		t.Fatalf("cpuProfile = false, want true")
 	}
 }
 

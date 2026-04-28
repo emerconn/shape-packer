@@ -37,3 +37,18 @@ docker run --rm \
   -w /work \
   ghcr.io/emerconn/polygon-packer:main 6 3 4
 ```
+
+### CPU Profiliing
+
+```bash
+go build .
+./polygon-packer 5 6 8 --cpuprofile
+go tool pprof -http=:8080 ./polygon_packer cpu.prof
+```
+
+### Benchmark Testing
+
+```bash
+go build .
+go test -bench=BenchmarkEvaluatorValue -benchmem -count=3
+```

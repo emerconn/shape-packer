@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,6 +48,7 @@ type config struct {
 	attempts         int
 	penaltyTolerance float64
 	finalStepSize    float64
+	cpuProfile       bool
 
 	unitPolygonVertices   []point
 	unitPolygonVectors    []point
@@ -93,7 +95,33 @@ func main() {
 		outputDir = "."
 	}
 
+	var stopCPUProfile func() error
+	if cfg.cpuProfile {
+		profilePath := filepath.Join(outputDir, "cpu.prof")
+		stopCPUProfile, err = startCPUProfile(profilePath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		defer func() {
+			if stopCPUProfile == nil {
+				return
+			}
+			if err := stopCPUProfile(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+		}()
+		fmt.Println("CPU profile enabled:", profilePath)
+	}
+
 	results := runAttempts(cfg)
+	if stopCPUProfile != nil {
+		if err := stopCPUProfile(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		stopCPUProfile = nil
+	}
 	bestSide := math.Inf(1)
 	var bestValues []float64
 	for _, result := range results {
@@ -117,6 +145,7 @@ func parseArgs(args []string) (*config, error) {
 	attempts := defaultAttempts
 	tolerance := defaultPenaltyTolerance
 	finalStep := defaultFinalStepSize
+	cpuProfile := false
 	positional := make([]string, 0, 3)
 
 	for i := 0; i < len(args); i++ {
@@ -124,6 +153,8 @@ func parseArgs(args []string) (*config, error) {
 		switch {
 		case arg == "-h" || arg == "--help":
 			return nil, errHelp
+		case arg == "--cpuprofile":
+			cpuProfile = true
 		case arg == "--attempts":
 			i++
 			if i >= len(args) {
@@ -224,6 +255,7 @@ func parseArgs(args []string) (*config, error) {
 		attempts:         attempts,
 		penaltyTolerance: tolerance,
 		finalStepSize:    finalStep,
+		cpuProfile:       cpuProfile,
 	}
 	cfg.precompute()
 	return cfg, nil
@@ -231,7 +263,7 @@ func parseArgs(args []string) (*config, error) {
 
 func usage() string {
 	return `Usage:
-  polygon_packer inner_polygons inner_sides container_sides [--attempts N] [--tolerance F] [--finalstep F]
+  polygon_packer inner_polygons inner_sides container_sides [--attempts N] [--tolerance F] [--finalstep F] [--cpuprofile]
 
 Arguments:
   inner_polygons   Number of inner polygons
@@ -242,7 +274,38 @@ Options:
   --attempts N     Number of attempts to run (default 1000)
   --tolerance F    Overlap penalty tolerance (default 1e-8)
   --finalstep F    Smallest theoretical container-size shrink step (default 0.0001)
+  --cpuprofile     Write a cpu.prof profile next to the output image
 `
+}
+
+func startCPUProfile(filename string) (func() error, error) {
+	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+		return nil, fmt.Errorf("create profile directory %s: %w", filepath.Dir(filename), err)
+	}
+
+	file, err := os.Create(filename)
+	if err != nil {
+		return nil, fmt.Errorf("create CPU profile %s: %w", filename, err)
+	}
+	if err := pprof.StartCPUProfile(file); err != nil {
+		closeErr := file.Close()
+		if closeErr != nil {
+			return nil, fmt.Errorf("start CPU profile %s: %w; close profile: %v", filename, err, closeErr)
+		}
+		return nil, fmt.Errorf("start CPU profile %s: %w", filename, err)
+	}
+
+	stopped := false
+	return func() error {
+		if !stopped {
+			pprof.StopCPUProfile()
+			stopped = true
+		}
+		if err := file.Close(); err != nil {
+			return fmt.Errorf("close CPU profile %s: %w", filename, err)
+		}
+		return nil
+	}, nil
 }
 
 func (cfg *config) precompute() {
