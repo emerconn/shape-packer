@@ -1,4 +1,4 @@
-name: Build and Release
+name: Test, Build and Release
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
     - 'go.sum'
     - 'Dockerfile'
     - '.dockerignore'
-    - '.github/workflows/build-release.yml'
+    - '.github/workflows/test-build-release.yml'
   pull_request:
     branches: [ '*' ]
     paths:
@@ -18,7 +18,7 @@ on:
     - 'go.sum'
     - 'Dockerfile'
     - '.dockerignore'
-    - '.github/workflows/build-release.yml'
+    - '.github/workflows/test-build-release.yml'
   release:
     types: [ created ]
 
