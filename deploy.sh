@@ -8,7 +8,6 @@ REGION="us-central1"
 IMAGE="us-central1-docker.pkg.dev/basic-bison-138323/ghcr-proxy/emerconn/polygon-packer:v0.0.8"
 SERVICE_ACCOUNT="817010668749-compute@developer.gserviceaccount.com"
 
-# The static arguments (matching your YAML)
 ARG2="3"
 ARG3="6"
 
@@ -21,39 +20,64 @@ for i in {1..40}; do
   JOB_NAME="polygon-packer-$i-$ARG2-$ARG3"
   
   echo "======================================"
-  echo "Creating: $JOB_NAME"
+  echo "Processing: $JOB_NAME"
   echo "======================================"
 
-  # 1. Strictly CREATE the job (will fail if it already exists)
-  if ! gcloud run jobs create "${JOB_NAME}" \
-    --project="${PROJECT_ID}" \
-    --region="${REGION}" \
-    --image="${IMAGE}" \
-    --args="${i},${ARG2},${ARG3}" \
-    --set-env-vars="OUTPUT_DIR=/mnt/data" \
-    --cpu="8" \
-    --memory="4Gi" \
-    --add-volume="name=gcs-1,type=cloud-storage,bucket=polygon-picker" \
-    --add-volume-mount="volume=gcs-1,mount-path=/mnt/data" \
-    --max-retries="0" \
-    --task-timeout="604800s" \
-    --execution-environment="gen2" \
-    --tasks="1" \
-    --service-account="${SERVICE_ACCOUNT}"; then
-      
-      echo "ERROR: Failed to create $JOB_NAME. It likely already exists."
-      echo "Aborting script to prevent unintended behavior."
+  # 1. Generate a clean YAML spec
+  # This bypasses all gcloud flag parsing bugs
+  cat <<EOF > temp-job.yaml
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+spec:
+  template:
+    spec:
+      taskCount: 1
+      template:
+        spec:
+          containers:
+          - image: ${IMAGE}
+            args:
+            - "${i}"
+            - "${ARG2}"
+            - "${ARG3}"
+            env:
+            - name: OUTPUT_DIR
+              value: /mnt/data
+            resources:
+              limits:
+                cpu: 8000m
+                memory: 4Gi
+            volumeMounts:
+            - name: gcs-1
+              mountPath: /mnt/data
+          volumes:
+          - name: gcs-1
+            csi:
+              driver: gcsfuse.run.googleapis.com
+              volumeAttributes:
+                bucketName: polygon-picker
+          maxRetries: 0
+          timeoutSeconds: 604800
+          serviceAccountName: ${SERVICE_ACCOUNT}
+EOF
+
+  # 2. Use 'replace' with '--force' to create or update
+  # This is the standard way to deploy from a file
+  if ! gcloud run jobs replace temp-job.yaml --region="${REGION}"; then
+      echo "ERROR: Failed to deploy $JOB_NAME."
+      rm temp-job.yaml
       exit 1
   fi
 
-  # 2. Execute the job
+  # 3. Execute asynchronously
   echo "Starting execution for $JOB_NAME..."
-  gcloud run jobs execute "${JOB_NAME}" \
-    --project="${PROJECT_ID}" \
-    --region="${REGION}" \
-    --async
+  gcloud run jobs execute "${JOB_NAME}" --region="${REGION}" --async
 
   echo ""
 done
 
-echo "All 40 jobs have been successfully created and triggered!"
+# Cleanup
+rm temp-job.yaml
+echo "All 40 jobs have been processed and triggered!"
