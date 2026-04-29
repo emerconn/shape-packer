@@ -3,12 +3,11 @@ package main
 import (
 	"math"
 	"math/rand"
-	"os"
 	"testing"
 )
 
 func TestParseArgsAllowsOptionsAfterPositionals(t *testing.T) {
-	cfg, err := parseArgs([]string{"3", "4", "6", "--attempts", "7", "--tolerance=1e-6", "--finalstep", "0.001", "--cpuprofile", "--cloudprofiler"})
+	cfg, err := parseArgs([]string{"3", "4", "6", "--attempts", "7", "--tolerance=1e-6", "--finalstep", "0.001", "--cpuprofile"})
 	if err != nil {
 		t.Fatalf("parseArgs returned error: %v", err)
 	}
@@ -26,50 +25,6 @@ func TestParseArgsAllowsOptionsAfterPositionals(t *testing.T) {
 	}
 	if !cfg.cpuProfile {
 		t.Fatalf("cpuProfile = false, want true")
-	}
-	if !cfg.cloudProfiler {
-		t.Fatalf("cloudProfiler = false, want true")
-	}
-}
-
-func TestShouldStartCloudProfiler(t *testing.T) {
-	unsetEnv(t, "CLOUD_PROFILER_ENABLED", "CLOUD_RUN_JOB", "K_SERVICE")
-	if !shouldStartCloudProfiler(true) {
-		t.Fatalf("shouldStartCloudProfiler(true) = false, want true")
-	}
-	if shouldStartCloudProfiler(false) {
-		t.Fatalf("shouldStartCloudProfiler(false) = true, want false")
-	}
-
-	t.Setenv("CLOUD_RUN_JOB", "polygon-packer-job")
-	if !shouldStartCloudProfiler(false) {
-		t.Fatalf("shouldStartCloudProfiler(false) with CLOUD_RUN_JOB = false, want true")
-	}
-
-	t.Setenv("CLOUD_PROFILER_ENABLED", "false")
-	if shouldStartCloudProfiler(true) {
-		t.Fatalf("shouldStartCloudProfiler(true) with CLOUD_PROFILER_ENABLED=false = true, want false")
-	}
-}
-
-func unsetEnv(t *testing.T, names ...string) {
-	t.Helper()
-	for _, name := range names {
-		previous, ok := os.LookupEnv(name)
-		if err := os.Unsetenv(name); err != nil {
-			t.Fatalf("unset %s: %v", name, err)
-		}
-		t.Cleanup(func() {
-			if ok {
-				if err := os.Setenv(name, previous); err != nil {
-					t.Fatalf("restore %s: %v", name, err)
-				}
-				return
-			}
-			if err := os.Unsetenv(name); err != nil {
-				t.Fatalf("restore unset %s: %v", name, err)
-			}
-		})
 	}
 }
 
@@ -128,6 +83,33 @@ func TestOptimizedPenaltyMatchesBruteForceReference(t *testing.T) {
 			if diff > tolerance {
 				t.Fatalf("penalty mismatch for args %v trial %d: got %g, want %g, diff %g", args, trial, got, want, diff)
 			}
+		}
+	}
+}
+
+func TestSpatialPenaltyMatchesBruteForceReference(t *testing.T) {
+	cfg, err := parseArgs([]string{"30", "6", "8", "--attempts", "1"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	eval := newEvaluator(cfg)
+	rng := rand.New(rand.NewSource(2))
+
+	for trial := 0; trial < 10; trial++ {
+		values := make([]float64, cfg.innerPolygons*3)
+		for i := 0; i < cfg.innerPolygons; i++ {
+			values[i*3] = rng.Float64()*10 - 5
+			values[i*3+1] = rng.Float64()*10 - 5
+			values[i*3+2] = rng.Float64() * 2 * math.Pi
+		}
+
+		side := 5 + rng.Float64()*4
+		got := eval.value(values, side)
+		want := bruteForcePenalty(cfg, values, side)
+		diff := math.Abs(got - want)
+		tolerance := 1e-9 * (1 + math.Max(math.Abs(got), math.Abs(want)))
+		if diff > tolerance {
+			t.Fatalf("penalty mismatch trial %d: got %g, want %g, diff %g", trial, got, want, diff)
 		}
 	}
 }
@@ -272,6 +254,27 @@ func BenchmarkEvaluatorValue(b *testing.B) {
 	}
 	eval := newEvaluator(cfg)
 	side := 4.2
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchmarkPenalty = eval.value(values, side)
+	}
+}
+
+func BenchmarkEvaluatorValueLarge(b *testing.B) {
+	cfg, err := parseArgs([]string{"40", "6", "8", "--attempts", "1"})
+	if err != nil {
+		b.Fatalf("parseArgs returned error: %v", err)
+	}
+	values := make([]float64, cfg.innerPolygons*3)
+	for i := 0; i < cfg.innerPolygons; i++ {
+		values[i*3] = float64(i%8)*1.4 - 4.9
+		values[i*3+1] = float64(i/8)*1.4 - 2.8
+		values[i*3+2] = float64(i) * 0.37
+	}
+	eval := newEvaluator(cfg)
+	side := 8.0
 
 	b.ReportAllocs()
 	b.ResetTimer()

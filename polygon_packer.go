@@ -16,15 +16,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-
-	"cloud.google.com/go/profiler"
 )
 
 const (
 	defaultAttempts         = 1000
 	defaultPenaltyTolerance = 1e-8
 	defaultFinalStepSize    = 0.0001
-	cloudProfilerService    = "polygon-packer"
 
 	lbfgsHistorySize       = 10
 	lbfgsMaxIterations     = 1000
@@ -35,6 +32,9 @@ const (
 	basinHoppingIterations = 50
 	basinHoppingTemp       = 0.1
 	basinHoppingStepSize   = 0.1
+
+	spatialGridThreshold = 96
+	spatialGridCellSize  = 2.0
 )
 
 var (
@@ -55,7 +55,6 @@ type config struct {
 	penaltyTolerance float64
 	finalStepSize    float64
 	cpuProfile       bool
-	cloudProfiler    bool
 
 	unitPolygonVertices   []point
 	unitPolygonVectors    []point
@@ -67,9 +66,13 @@ type config struct {
 }
 
 type evaluator struct {
-	cfg     *config
-	polys   []point
-	vectors []point
+	cfg        *config
+	polys      []point
+	vectors    []point
+	cells      []gridCell
+	nextInCell []int
+	cellHeads  map[gridCell]int
+	usedCells  []gridCell
 }
 
 type optResult struct {
@@ -83,6 +86,11 @@ type attemptResult struct {
 	seed   int
 	side   float64
 	values []float64
+}
+
+type gridCell struct {
+	x int
+	y int
 }
 
 func main() {
@@ -100,14 +108,6 @@ func main() {
 	outputDir := os.Getenv("OUTPUT_DIR")
 	if outputDir == "" {
 		outputDir = "."
-	}
-
-	if shouldStartCloudProfiler(cfg.cloudProfiler) {
-		if cfg.cpuProfile {
-			fmt.Fprintln(os.Stderr, "Cloud Profiler disabled because --cpuprofile is enabled")
-		} else if err := startCloudProfiler(); err != nil {
-			fmt.Fprintln(os.Stderr, "Cloud Profiler disabled:", err)
-		}
 	}
 
 	var stopCPUProfile func() error
@@ -162,7 +162,6 @@ func parseArgs(args []string) (*config, error) {
 	tolerance := defaultPenaltyTolerance
 	finalStep := defaultFinalStepSize
 	cpuProfile := false
-	cloudProfiler := false
 	positional := make([]string, 0, 3)
 
 	for i := 0; i < len(args); i++ {
@@ -172,8 +171,6 @@ func parseArgs(args []string) (*config, error) {
 			return nil, errHelp
 		case arg == "--cpuprofile":
 			cpuProfile = true
-		case arg == "--cloudprofiler":
-			cloudProfiler = true
 		case arg == "--attempts":
 			i++
 			if i >= len(args) {
@@ -275,7 +272,6 @@ func parseArgs(args []string) (*config, error) {
 		penaltyTolerance: tolerance,
 		finalStepSize:    finalStep,
 		cpuProfile:       cpuProfile,
-		cloudProfiler:    cloudProfiler,
 	}
 	cfg.precompute()
 	return cfg, nil
@@ -283,7 +279,7 @@ func parseArgs(args []string) (*config, error) {
 
 func usage() string {
 	return `Usage:
-  polygon_packer inner_polygons inner_sides container_sides [--attempts N] [--tolerance F] [--finalstep F] [--cpuprofile] [--cloudprofiler]
+  polygon_packer inner_polygons inner_sides container_sides [--attempts N] [--tolerance F] [--finalstep F] [--cpuprofile]
 
 Arguments:
   inner_polygons   Number of inner polygons
@@ -295,46 +291,7 @@ Options:
   --tolerance F    Overlap penalty tolerance (default 1e-8)
   --finalstep F    Smallest theoretical container-size shrink step (default 0.0001)
   --cpuprofile     Write a cpu.prof profile next to the output image
-  --cloudprofiler  Send profiles to Google Cloud Profiler
 `
-}
-
-func shouldStartCloudProfiler(enabledByFlag bool) bool {
-	if value, ok := lookupBoolEnv("CLOUD_PROFILER_ENABLED"); ok {
-		return value
-	}
-	return enabledByFlag || os.Getenv("CLOUD_RUN_JOB") != "" || os.Getenv("K_SERVICE") != ""
-}
-
-func startCloudProfiler() error {
-	cfg := profiler.Config{
-		Service:        cloudProfilerService,
-		ServiceVersion: version,
-		DebugLogging:   boolEnv("CLOUD_PROFILER_DEBUG"),
-		MutexProfiling: boolEnv("CLOUD_PROFILER_MUTEX"),
-		ProjectID:      os.Getenv("CLOUD_PROFILER_PROJECT_ID"),
-	}
-	return profiler.Start(cfg)
-}
-
-func boolEnv(name string) bool {
-	value, _ := lookupBoolEnv(name)
-	return value
-}
-
-func lookupBoolEnv(name string) (bool, bool) {
-	value, ok := os.LookupEnv(name)
-	if !ok {
-		return false, false
-	}
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "t", "yes", "y", "on":
-		return true, true
-	case "0", "false", "f", "no", "n", "off", "":
-		return false, true
-	default:
-		return false, true
-	}
 }
 
 func uniqueFilename(base string) string {
@@ -409,9 +366,13 @@ func (cfg *config) precompute() {
 
 func newEvaluator(cfg *config) *evaluator {
 	return &evaluator{
-		cfg:     cfg,
-		polys:   make([]point, cfg.innerPolygons*cfg.innerSides),
-		vectors: make([]point, cfg.innerPolygons*cfg.innerSides),
+		cfg:        cfg,
+		polys:      make([]point, cfg.innerPolygons*cfg.innerSides),
+		vectors:    make([]point, cfg.innerPolygons*cfg.innerSides),
+		cells:      make([]gridCell, cfg.innerPolygons),
+		nextInCell: make([]int, cfg.innerPolygons),
+		cellHeads:  make(map[gridCell]int, cfg.innerPolygons),
+		usedCells:  make([]gridCell, 0, cfg.innerPolygons),
 	}
 }
 
@@ -472,7 +433,7 @@ func repetition(seed int, cfg *config) attemptResult {
 			continue
 		}
 
-		basinResult := basinHopping(x0, func(x []float64) float64 {
+		basinResult := basinHopping(minimized, func(x []float64) float64 {
 			return eval.value(x, sideForObjective)
 		}, rng)
 		if basinResult.fun < cfg.penaltyTolerance {
@@ -543,95 +504,97 @@ func (e *evaluator) value(values []float64, side float64) float64 {
 			values[valueBase],
 			values[valueBase+1],
 			values[valueBase+2],
-			cfg.unitPolygonVertices,
-			cfg.unitPolygonVectors,
-			cfg.unitContainerVectors,
+			cfg,
 			containerLimit,
 			polygon,
 			vectors,
 		)
 	}
 
-	for i := 0; i < cfg.innerPolygons; i++ {
-		valueBaseI := i * 3
-		centerIX := values[valueBaseI]
-		centerIY := values[valueBaseI+1]
-		baseI := i * innerSides
-		polygonI := e.polys[baseI : baseI+innerSides]
-		vectorsI := e.vectors[baseI : baseI+innerSides]
-		for j := i + 1; j < cfg.innerPolygons; j++ {
-			valueBaseJ := j * 3
-			centerJX := values[valueBaseJ]
-			centerJY := values[valueBaseJ+1]
-			dx := centerIX - centerJX
-			dy := centerIY - centerJY
-			if dx*dx+dy*dy >= 4 {
-				continue
-			}
-
-			baseJ := j * innerSides
-			polygonJ := e.polys[baseJ : baseJ+innerSides]
-			vectorsJ := e.vectors[baseJ : baseJ+innerSides]
-			collision := true
-			minOverlap := 1e20
-
-			// For congruent regular polygons, projection width is constant across
-			// another polygon's axis family; only the center projection changes.
-			firstVectorI := vectorsI[0]
-			firstCenterProjectionJ := centerJX*firstVectorI.x + centerJY*firstVectorI.y
-			firstMinJ, firstMaxJ := projectPolygon(polygonJ, firstVectorI.x, firstVectorI.y)
-			axisIMinJ := firstMinJ - firstCenterProjectionJ
-			axisIMaxJ := firstMaxJ - firstCenterProjectionJ
-			for axis := 0; axis < innerSides; axis++ {
-				vector := vectorsI[axis]
-				axisX := vector.x
-				axisY := vector.y
-				centerProjection := centerIX*axisX + centerIY*axisY
-				minI := centerProjection + cfg.unitPolygonAxisMin
-				maxI := centerProjection + cfg.unitPolygonAxisMax
-				centerProjectionJ := centerJX*axisX + centerJY*axisY
-				minJ := centerProjectionJ + axisIMinJ
-				maxJ := centerProjectionJ + axisIMaxJ
-				overlap := intervalOverlap(minI, maxI, minJ, maxJ)
-				if overlap <= 0 {
-					collision = false
-					break
+	if cfg.innerPolygons >= spatialGridThreshold {
+		penalty += e.spatialCollisionPenalty(values)
+	} else {
+		for i := 0; i < cfg.innerPolygons; i++ {
+			valueBaseI := i * 3
+			centerIX := values[valueBaseI]
+			centerIY := values[valueBaseI+1]
+			baseI := i * innerSides
+			polygonI := e.polys[baseI : baseI+innerSides]
+			vectorsI := e.vectors[baseI : baseI+innerSides]
+			for j := i + 1; j < cfg.innerPolygons; j++ {
+				valueBaseJ := j * 3
+				centerJX := values[valueBaseJ]
+				centerJY := values[valueBaseJ+1]
+				dx := centerIX - centerJX
+				dy := centerIY - centerJY
+				if dx*dx+dy*dy >= 4 {
+					continue
 				}
-				if overlap < minOverlap {
-					minOverlap = overlap
-				}
-			}
-			if !collision {
-				continue
-			}
 
-			firstVectorJ := vectorsJ[0]
-			firstCenterProjectionI := centerIX*firstVectorJ.x + centerIY*firstVectorJ.y
-			firstMinI, firstMaxI := projectPolygon(polygonI, firstVectorJ.x, firstVectorJ.y)
-			axisJMinI := firstMinI - firstCenterProjectionI
-			axisJMaxI := firstMaxI - firstCenterProjectionI
-			for axis := 0; axis < innerSides; axis++ {
-				vector := vectorsJ[axis]
-				axisX := vector.x
-				axisY := vector.y
-				centerProjectionI := centerIX*axisX + centerIY*axisY
-				minI := centerProjectionI + axisJMinI
-				maxI := centerProjectionI + axisJMaxI
-				centerProjection := centerJX*axisX + centerJY*axisY
-				minJ := centerProjection + cfg.unitPolygonAxisMin
-				maxJ := centerProjection + cfg.unitPolygonAxisMax
-				overlap := intervalOverlap(minI, maxI, minJ, maxJ)
-				if overlap <= 0 {
-					collision = false
-					break
-				}
-				if overlap < minOverlap {
-					minOverlap = overlap
-				}
-			}
+				baseJ := j * innerSides
+				polygonJ := e.polys[baseJ : baseJ+innerSides]
+				vectorsJ := e.vectors[baseJ : baseJ+innerSides]
+				collision := true
+				minOverlap := 1e20
 
-			if collision {
-				penalty += minOverlap * minOverlap
+				// For congruent regular polygons, projection width is constant across
+				// another polygon's axis family; only the center projection changes.
+				firstVectorI := vectorsI[0]
+				firstCenterProjectionJ := centerJX*firstVectorI.x + centerJY*firstVectorI.y
+				firstMinJ, firstMaxJ := projectPolygon(polygonJ, firstVectorI.x, firstVectorI.y)
+				axisIMinJ := firstMinJ - firstCenterProjectionJ
+				axisIMaxJ := firstMaxJ - firstCenterProjectionJ
+				for axis := 0; axis < innerSides; axis++ {
+					vector := vectorsI[axis]
+					axisX := vector.x
+					axisY := vector.y
+					centerProjection := centerIX*axisX + centerIY*axisY
+					minI := centerProjection + cfg.unitPolygonAxisMin
+					maxI := centerProjection + cfg.unitPolygonAxisMax
+					centerProjectionJ := centerJX*axisX + centerJY*axisY
+					minJ := centerProjectionJ + axisIMinJ
+					maxJ := centerProjectionJ + axisIMaxJ
+					overlap := intervalOverlap(minI, maxI, minJ, maxJ)
+					if overlap <= 0 {
+						collision = false
+						break
+					}
+					if overlap < minOverlap {
+						minOverlap = overlap
+					}
+				}
+				if !collision {
+					continue
+				}
+
+				firstVectorJ := vectorsJ[0]
+				firstCenterProjectionI := centerIX*firstVectorJ.x + centerIY*firstVectorJ.y
+				firstMinI, firstMaxI := projectPolygon(polygonI, firstVectorJ.x, firstVectorJ.y)
+				axisJMinI := firstMinI - firstCenterProjectionI
+				axisJMaxI := firstMaxI - firstCenterProjectionI
+				for axis := 0; axis < innerSides; axis++ {
+					vector := vectorsJ[axis]
+					axisX := vector.x
+					axisY := vector.y
+					centerProjectionI := centerIX*axisX + centerIY*axisY
+					minI := centerProjectionI + axisJMinI
+					maxI := centerProjectionI + axisJMaxI
+					centerProjection := centerJX*axisX + centerJY*axisY
+					minJ := centerProjection + cfg.unitPolygonAxisMin
+					maxJ := centerProjection + cfg.unitPolygonAxisMax
+					overlap := intervalOverlap(minI, maxI, minJ, maxJ)
+					if overlap <= 0 {
+						collision = false
+						break
+					}
+					if overlap < minOverlap {
+						minOverlap = overlap
+					}
+				}
+
+				if collision {
+					penalty += minOverlap * minOverlap
+				}
 			}
 		}
 	}
@@ -639,18 +602,142 @@ func (e *evaluator) value(values []float64, side float64) float64 {
 	return penalty
 }
 
-func transformPolygonAndVectors(x, y, angle float64, vertices, baseVectors, containerVectors []point, containerLimit float64, polygonOut, vectorOut []point) float64 {
-	cosAngle := math.Cos(angle)
-	sinAngle := math.Sin(angle)
+func (e *evaluator) spatialCollisionPenalty(values []float64) float64 {
+	e.buildSpatialGrid(values)
+
+	penalty := 0.0
+	for i := 0; i < e.cfg.innerPolygons; i++ {
+		cell := e.cells[i]
+		for dx := -1; dx <= 1; dx++ {
+			for dy := -1; dy <= 1; dy++ {
+				head, ok := e.cellHeads[gridCell{x: cell.x + dx, y: cell.y + dy}]
+				if !ok {
+					continue
+				}
+				for j := head; j >= 0; j = e.nextInCell[j] {
+					if j > i {
+						penalty += e.pairPenalty(values, i, j)
+					}
+				}
+			}
+		}
+	}
+	return penalty
+}
+
+func (e *evaluator) buildSpatialGrid(values []float64) {
+	for _, cell := range e.usedCells {
+		delete(e.cellHeads, cell)
+	}
+	e.usedCells = e.usedCells[:0]
+
+	for i := 0; i < e.cfg.innerPolygons; i++ {
+		valueBase := i * 3
+		cell := gridCell{
+			x: int(math.Floor(values[valueBase] / spatialGridCellSize)),
+			y: int(math.Floor(values[valueBase+1] / spatialGridCellSize)),
+		}
+		e.cells[i] = cell
+
+		head, ok := e.cellHeads[cell]
+		if !ok {
+			head = -1
+			e.usedCells = append(e.usedCells, cell)
+		}
+		e.nextInCell[i] = head
+		e.cellHeads[cell] = i
+	}
+}
+
+func (e *evaluator) pairPenalty(values []float64, i, j int) float64 {
+	cfg := e.cfg
+	innerSides := cfg.innerSides
+
+	valueBaseI := i * 3
+	centerIX := values[valueBaseI]
+	centerIY := values[valueBaseI+1]
+	valueBaseJ := j * 3
+	centerJX := values[valueBaseJ]
+	centerJY := values[valueBaseJ+1]
+
+	dx := centerIX - centerJX
+	dy := centerIY - centerJY
+	if dx*dx+dy*dy >= 4 {
+		return 0
+	}
+
+	baseI := i * innerSides
+	polygonI := e.polys[baseI : baseI+innerSides]
+	vectorsI := e.vectors[baseI : baseI+innerSides]
+	baseJ := j * innerSides
+	polygonJ := e.polys[baseJ : baseJ+innerSides]
+	vectorsJ := e.vectors[baseJ : baseJ+innerSides]
+	minOverlap := 1e20
+
+	// For congruent regular polygons, projection width is constant across
+	// another polygon's axis family; only the center projection changes.
+	firstVectorI := vectorsI[0]
+	firstCenterProjectionJ := centerJX*firstVectorI.x + centerJY*firstVectorI.y
+	firstMinJ, firstMaxJ := projectPolygon(polygonJ, firstVectorI.x, firstVectorI.y)
+	axisIMinJ := firstMinJ - firstCenterProjectionJ
+	axisIMaxJ := firstMaxJ - firstCenterProjectionJ
+	for axis := 0; axis < innerSides; axis++ {
+		vector := vectorsI[axis]
+		axisX := vector.x
+		axisY := vector.y
+		centerProjection := centerIX*axisX + centerIY*axisY
+		minI := centerProjection + cfg.unitPolygonAxisMin
+		maxI := centerProjection + cfg.unitPolygonAxisMax
+		centerProjectionJ := centerJX*axisX + centerJY*axisY
+		minJ := centerProjectionJ + axisIMinJ
+		maxJ := centerProjectionJ + axisIMaxJ
+		overlap := intervalOverlap(minI, maxI, minJ, maxJ)
+		if overlap <= 0 {
+			return 0
+		}
+		if overlap < minOverlap {
+			minOverlap = overlap
+		}
+	}
+
+	firstVectorJ := vectorsJ[0]
+	firstCenterProjectionI := centerIX*firstVectorJ.x + centerIY*firstVectorJ.y
+	firstMinI, firstMaxI := projectPolygon(polygonI, firstVectorJ.x, firstVectorJ.y)
+	axisJMinI := firstMinI - firstCenterProjectionI
+	axisJMaxI := firstMaxI - firstCenterProjectionI
+	for axis := 0; axis < innerSides; axis++ {
+		vector := vectorsJ[axis]
+		axisX := vector.x
+		axisY := vector.y
+		centerProjectionI := centerIX*axisX + centerIY*axisY
+		minI := centerProjectionI + axisJMinI
+		maxI := centerProjectionI + axisJMaxI
+		centerProjection := centerJX*axisX + centerJY*axisY
+		minJ := centerProjection + cfg.unitPolygonAxisMin
+		maxJ := centerProjection + cfg.unitPolygonAxisMax
+		overlap := intervalOverlap(minI, maxI, minJ, maxJ)
+		if overlap <= 0 {
+			return 0
+		}
+		if overlap < minOverlap {
+			minOverlap = overlap
+		}
+	}
+
+	return minOverlap * minOverlap
+}
+
+func transformPolygonAndVectors(x, y, angle float64, cfg *config, containerLimit float64, polygonOut, vectorOut []point) float64 {
+	sinAngle, cosAngle := math.Sincos(angle)
 	penalty := 0.0
 
-	for i := range vertices {
-		vertex := vertices[i]
+	for i := range cfg.unitPolygonVertices {
+		vertex := cfg.unitPolygonVertices[i]
 		polygonX := x + (vertex.x*cosAngle - vertex.y*sinAngle)
 		polygonY := y + (vertex.x*sinAngle + vertex.y*cosAngle)
 		polygonOut[i] = point{x: polygonX, y: polygonY}
 
-		for _, vector := range containerVectors {
+		for _, vector := range cfg.unitContainerVectors {
 			distance := polygonX*vector.x + polygonY*vector.y
 			if distance > containerLimit {
 				diff := distance - containerLimit
@@ -658,7 +745,7 @@ func transformPolygonAndVectors(x, y, angle float64, vertices, baseVectors, cont
 			}
 		}
 
-		baseVector := baseVectors[i]
+		baseVector := cfg.unitPolygonVectors[i]
 		vectorOut[i] = point{
 			x: baseVector.x*cosAngle - baseVector.y*sinAngle,
 			y: baseVector.x*sinAngle + baseVector.y*cosAngle,
@@ -669,8 +756,7 @@ func transformPolygonAndVectors(x, y, angle float64, vertices, baseVectors, cont
 }
 
 func transformPolygon(x, y, angle float64, vertices []point, out []point) {
-	cosAngle := math.Cos(angle)
-	sinAngle := math.Sin(angle)
+	sinAngle, cosAngle := math.Sincos(angle)
 	for i, vertex := range vertices {
 		out[i] = point{
 			x: x + (vertex.x*cosAngle - vertex.y*sinAngle),
@@ -680,8 +766,7 @@ func transformPolygon(x, y, angle float64, vertices []point, out []point) {
 }
 
 func rotateVectors(angle float64, vectors []point, out []point) {
-	cosAngle := math.Cos(angle)
-	sinAngle := math.Sin(angle)
+	sinAngle, cosAngle := math.Sincos(angle)
 	for i, vector := range vectors {
 		out[i] = point{
 			x: vector.x*cosAngle - vector.y*sinAngle,
@@ -725,6 +810,9 @@ func minimizeLBFGS(x0 []float64, objective func([]float64) float64, tol float64)
 	x := cloneFloat64s(x0)
 	fun := objective(x)
 	evals := 1
+	if fun == 0 {
+		return optResult{x: x, fun: fun, evals: evals}
+	}
 	gradient := make([]float64, n)
 	gradientEvals := finiteDifferenceGradient(objective, x, fun, gradient, lbfgsMaxFunctionEvals-evals)
 	evals += gradientEvals
@@ -883,8 +971,7 @@ func lineSearch(objective func([]float64) float64, x []float64, f0 float64, grad
 	return nil, 0, evals, false
 }
 
-func basinHopping(x0 []float64, objective func([]float64) float64, rng *rand.Rand) optResult {
-	current := minimizeLBFGS(x0, objective, 1e-8)
+func basinHopping(current optResult, objective func([]float64) float64, rng *rand.Rand) optResult {
 	best := optResult{
 		x:          cloneFloat64s(current.x),
 		fun:        current.fun,
