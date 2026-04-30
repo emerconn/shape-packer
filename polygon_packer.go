@@ -42,8 +42,9 @@ const (
 )
 
 var (
-	version = "dev"
-	errHelp = errors.New("help requested")
+	version      = "dev"
+	errHelp      = errors.New("help requested")
+	outputScales = [...]int{1, 2, 4, 6}
 )
 
 type point struct {
@@ -161,11 +162,13 @@ func main() {
 	sideLength := bestSide * math.Sin(math.Pi/float64(cfg.containerSides)) / math.Sin(math.Pi/float64(cfg.innerSides))
 	fmt.Println("Final side length:", sideLength)
 
-	filename := filepath.Join(outputDir, fmt.Sprintf("%d_%d_in_%d.png", cfg.innerPolygons, cfg.innerSides, cfg.containerSides))
-	filename = uniqueFilename(filename)
-	if err := savePlot(filename, cfg, bestSide, bestValues, sideLength); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	baseName := filepath.Join(outputDir, fmt.Sprintf("%d_%d_in_%d", cfg.innerPolygons, cfg.innerSides, cfg.containerSides))
+	for _, outputScale := range outputScales {
+		filename := uniqueFilename(fmt.Sprintf("%s_res%d.png", baseName, outputScale))
+		if err := savePlot(filename, cfg, bestSide, bestValues, sideLength, outputScale); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	}
 }
 
@@ -919,18 +922,21 @@ func basinHopping(current optResult, objective func([]float64) float64, rng *ran
 	return best
 }
 
-func savePlot(filename string, cfg *config, side float64, values []float64, sideLength float64) error {
+func savePlot(filename string, cfg *config, side float64, values []float64, sideLength float64, outputScale int) error {
 	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
 		return fmt.Errorf("create directory %s: %w", filepath.Dir(filename), err)
 	}
 
 	const (
-		outputScale = 6
-		width       = 640 * outputScale
-		height      = 480 * outputScale
-		titleArea   = 40 * outputScale
-		margin      = 24 * outputScale
+		baseWidth     = 640
+		baseHeight    = 480
+		baseTitleArea = 40
+		baseMargin    = 24
 	)
+	width := baseWidth * outputScale
+	height := baseHeight * outputScale
+	titleArea := baseTitleArea * outputScale
+	margin := baseMargin * outputScale
 
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	draw.Draw(img, img.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
