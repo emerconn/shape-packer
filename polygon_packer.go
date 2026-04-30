@@ -532,19 +532,91 @@ func (e *evaluator) value(values []float64, side float64) float64 {
 	if cfg.innerPolygons >= spatialGridThreshold {
 		penalty += e.spatialCollisionPenalty(values)
 	} else {
-		penalty += e.collisionPenalty(values)
-	}
+		for i := 0; i < cfg.innerPolygons; i++ {
+			valueBaseI := i * 3
+			centerIX := values[valueBaseI]
+			centerIY := values[valueBaseI+1]
+			baseI := i * innerSides
+			polygonI := e.polys[baseI : baseI+innerSides]
+			vectorsI := e.vectors[baseI : baseI+innerSides]
+			for j := i + 1; j < cfg.innerPolygons; j++ {
+				valueBaseJ := j * 3
+				centerJX := values[valueBaseJ]
+				centerJY := values[valueBaseJ+1]
+				dx := centerIX - centerJX
+				dy := centerIY - centerJY
+				if dx*dx+dy*dy >= 4 {
+					continue
+				}
 
-	return penalty
-}
+				baseJ := j * innerSides
+				polygonJ := e.polys[baseJ : baseJ+innerSides]
+				vectorsJ := e.vectors[baseJ : baseJ+innerSides]
+				collision := true
+				minOverlap := 1e20
 
-func (e *evaluator) collisionPenalty(values []float64) float64 {
-	penalty := 0.0
-	for i := 0; i < e.cfg.innerPolygons; i++ {
-		for j := i + 1; j < e.cfg.innerPolygons; j++ {
-			penalty += e.pairPenalty(values, i, j)
+				// For congruent regular polygons, projection width is constant across
+				// another polygon's axis family; only the center projection changes.
+				firstVectorI := vectorsI[0]
+				firstCenterProjectionJ := centerJX*firstVectorI.x + centerJY*firstVectorI.y
+				firstMinJ, firstMaxJ := projectPolygon(polygonJ, firstVectorI.x, firstVectorI.y)
+				axisIMinJ := firstMinJ - firstCenterProjectionJ
+				axisIMaxJ := firstMaxJ - firstCenterProjectionJ
+				for axis := 0; axis < innerSides; axis++ {
+					vector := vectorsI[axis]
+					axisX := vector.x
+					axisY := vector.y
+					centerProjection := centerIX*axisX + centerIY*axisY
+					minI := centerProjection + cfg.unitPolygonAxisMin
+					maxI := centerProjection + cfg.unitPolygonAxisMax
+					centerProjectionJ := centerJX*axisX + centerJY*axisY
+					minJ := centerProjectionJ + axisIMinJ
+					maxJ := centerProjectionJ + axisIMaxJ
+					overlap := intervalOverlap(minI, maxI, minJ, maxJ)
+					if overlap <= 0 {
+						collision = false
+						break
+					}
+					if overlap < minOverlap {
+						minOverlap = overlap
+					}
+				}
+				if !collision {
+					continue
+				}
+
+				firstVectorJ := vectorsJ[0]
+				firstCenterProjectionI := centerIX*firstVectorJ.x + centerIY*firstVectorJ.y
+				firstMinI, firstMaxI := projectPolygon(polygonI, firstVectorJ.x, firstVectorJ.y)
+				axisJMinI := firstMinI - firstCenterProjectionI
+				axisJMaxI := firstMaxI - firstCenterProjectionI
+				for axis := 0; axis < innerSides; axis++ {
+					vector := vectorsJ[axis]
+					axisX := vector.x
+					axisY := vector.y
+					centerProjectionI := centerIX*axisX + centerIY*axisY
+					minI := centerProjectionI + axisJMinI
+					maxI := centerProjectionI + axisJMaxI
+					centerProjection := centerJX*axisX + centerJY*axisY
+					minJ := centerProjection + cfg.unitPolygonAxisMin
+					maxJ := centerProjection + cfg.unitPolygonAxisMax
+					overlap := intervalOverlap(minI, maxI, minJ, maxJ)
+					if overlap <= 0 {
+						collision = false
+						break
+					}
+					if overlap < minOverlap {
+						minOverlap = overlap
+					}
+				}
+
+				if collision {
+					penalty += minOverlap * minOverlap
+				}
+			}
 		}
 	}
+
 	return penalty
 }
 
@@ -597,65 +669,80 @@ func (e *evaluator) buildSpatialGrid(values []float64) {
 
 func (e *evaluator) pairPenalty(values []float64, i, j int) float64 {
 	cfg := e.cfg
+	innerSides := cfg.innerSides
 
 	valueBaseI := i * 3
-	centerI := point{x: values[valueBaseI], y: values[valueBaseI+1]}
+	centerIX := values[valueBaseI]
+	centerIY := values[valueBaseI+1]
 	valueBaseJ := j * 3
-	centerJ := point{x: values[valueBaseJ], y: values[valueBaseJ+1]}
+	centerJX := values[valueBaseJ]
+	centerJY := values[valueBaseJ+1]
 
-	dx := centerI.x - centerJ.x
-	dy := centerI.y - centerJ.y
+	dx := centerIX - centerJX
+	dy := centerIY - centerJY
 	if dx*dx+dy*dy >= 4 {
 		return 0
 	}
 
-	polygonI, vectorsI := e.polygon(i)
-	polygonJ, vectorsJ := e.polygon(j)
-	overlapI, ok := axisFamilyOverlap(vectorsI, polygonJ, centerI, centerJ, cfg.unitPolygonAxisMin, cfg.unitPolygonAxisMax)
-	if !ok {
-		return 0
-	}
-	overlapJ, ok := axisFamilyOverlap(vectorsJ, polygonI, centerJ, centerI, cfg.unitPolygonAxisMin, cfg.unitPolygonAxisMax)
-	if !ok {
-		return 0
-	}
-	minOverlap := min(overlapI, overlapJ)
-	return minOverlap * minOverlap
-}
+	baseI := i * innerSides
+	polygonI := e.polys[baseI : baseI+innerSides]
+	vectorsI := e.vectors[baseI : baseI+innerSides]
+	baseJ := j * innerSides
+	polygonJ := e.polys[baseJ : baseJ+innerSides]
+	vectorsJ := e.vectors[baseJ : baseJ+innerSides]
+	minOverlap := 1e20
 
-func (e *evaluator) polygon(i int) ([]point, []point) {
-	base := i * e.cfg.innerSides
-	end := base + e.cfg.innerSides
-	return e.polys[base:end], e.vectors[base:end]
-}
-
-func axisFamilyOverlap(axes, otherPolygon []point, center, otherCenter point, ownMin, ownMax float64) (float64, bool) {
-	firstAxis := axes[0]
-	otherMin, otherMax := projectPolygon(otherPolygon, firstAxis.x, firstAxis.y)
-	otherCenterProjection := otherCenter.dot(firstAxis)
-	otherMin -= otherCenterProjection
-	otherMax -= otherCenterProjection
-
-	minOverlap := math.Inf(1)
-	for _, axis := range axes {
-		centerProjection := center.dot(axis)
-		otherCenterProjection := otherCenter.dot(axis)
-		overlap := intervalOverlap(
-			centerProjection+ownMin,
-			centerProjection+ownMax,
-			otherCenterProjection+otherMin,
-			otherCenterProjection+otherMax,
-		)
+	// For congruent regular polygons, projection width is constant across
+	// another polygon's axis family; only the center projection changes.
+	firstVectorI := vectorsI[0]
+	firstCenterProjectionJ := centerJX*firstVectorI.x + centerJY*firstVectorI.y
+	firstMinJ, firstMaxJ := projectPolygon(polygonJ, firstVectorI.x, firstVectorI.y)
+	axisIMinJ := firstMinJ - firstCenterProjectionJ
+	axisIMaxJ := firstMaxJ - firstCenterProjectionJ
+	for axis := 0; axis < innerSides; axis++ {
+		vector := vectorsI[axis]
+		axisX := vector.x
+		axisY := vector.y
+		centerProjection := centerIX*axisX + centerIY*axisY
+		minI := centerProjection + cfg.unitPolygonAxisMin
+		maxI := centerProjection + cfg.unitPolygonAxisMax
+		centerProjectionJ := centerJX*axisX + centerJY*axisY
+		minJ := centerProjectionJ + axisIMinJ
+		maxJ := centerProjectionJ + axisIMaxJ
+		overlap := intervalOverlap(minI, maxI, minJ, maxJ)
 		if overlap <= 0 {
-			return 0, false
+			return 0
 		}
-		minOverlap = min(minOverlap, overlap)
+		if overlap < minOverlap {
+			minOverlap = overlap
+		}
 	}
-	return minOverlap, true
-}
 
-func (p point) dot(other point) float64 {
-	return p.x*other.x + p.y*other.y
+	firstVectorJ := vectorsJ[0]
+	firstCenterProjectionI := centerIX*firstVectorJ.x + centerIY*firstVectorJ.y
+	firstMinI, firstMaxI := projectPolygon(polygonI, firstVectorJ.x, firstVectorJ.y)
+	axisJMinI := firstMinI - firstCenterProjectionI
+	axisJMaxI := firstMaxI - firstCenterProjectionI
+	for axis := 0; axis < innerSides; axis++ {
+		vector := vectorsJ[axis]
+		axisX := vector.x
+		axisY := vector.y
+		centerProjectionI := centerIX*axisX + centerIY*axisY
+		minI := centerProjectionI + axisJMinI
+		maxI := centerProjectionI + axisJMaxI
+		centerProjection := centerJX*axisX + centerJY*axisY
+		minJ := centerProjection + cfg.unitPolygonAxisMin
+		maxJ := centerProjection + cfg.unitPolygonAxisMax
+		overlap := intervalOverlap(minI, maxI, minJ, maxJ)
+		if overlap <= 0 {
+			return 0
+		}
+		if overlap < minOverlap {
+			minOverlap = overlap
+		}
+	}
+
+	return minOverlap * minOverlap
 }
 
 func transformPolygonAndVectors(x, y, angle float64, cfg *config, containerLimit float64, polygonOut, vectorOut []point) float64 {
@@ -714,14 +801,26 @@ func projectPolygon(vertices []point, axisX, axisY float64) (float64, float64) {
 	for i := 1; i < len(vertices); i++ {
 		vertex := vertices[i]
 		dot := vertex.x*axisX + vertex.y*axisY
-		minValue = min(minValue, dot)
-		maxValue = max(maxValue, dot)
+		if dot < minValue {
+			minValue = dot
+		}
+		if dot > maxValue {
+			maxValue = dot
+		}
 	}
 	return minValue, maxValue
 }
 
 func intervalOverlap(minA, maxA, minB, maxB float64) float64 {
-	return min(maxA, maxB) - max(minA, minB)
+	upper := maxA
+	if maxB < upper {
+		upper = maxB
+	}
+	lower := minA
+	if minB > lower {
+		lower = minB
+	}
+	return upper - lower
 }
 
 func minimizeLBFGS(x0 []float64, objective func([]float64) float64, tol float64) optResult {
