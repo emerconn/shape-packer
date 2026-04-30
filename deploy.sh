@@ -5,11 +5,11 @@
 # ==========================================
 PROJECT_ID="basic-bison-138323"
 REGION="us-south1"
-IMAGE="us-central1-docker.pkg.dev/basic-bison-138323/ghcr-proxy/emerconn/polygon-packer:v0.0.24"
+IMAGE="us-central1-docker.pkg.dev/basic-bison-138323/ghcr-proxy/emerconn/polygon-packer:v0.0.26"
 SERVICE_ACCOUNT="817010668749-compute@developer.gserviceaccount.com"
 
 ARG2="5"
-ARG3="5"
+ARG3="4"
 
 gcloud config set project "${PROJECT_ID}"
 
