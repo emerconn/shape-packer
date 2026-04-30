@@ -70,13 +70,15 @@ type config struct {
 }
 
 type evaluator struct {
-	cfg        *config
-	polys      []point
-	vectors    []point
-	cells      []gridCell
-	nextInCell []int
-	cellHeads  map[gridCell]int
-	usedCells  []gridCell
+	cfg              *config
+	polys            []point
+	vectors          []point
+	cells            []gridCell
+	nextInCell       []int
+	cellHeads        map[gridCell]int
+	usedCells        []gridCell
+	polygonPenalties []float64
+	pairPenalties    []float64
 }
 
 type optResult struct {
@@ -94,6 +96,13 @@ type attemptResult struct {
 
 type gridCell struct {
 	x, y int
+}
+
+type gradientFunc func(x []float64, f0 float64, gradient []float64, maxEvals int) int
+
+type packingObjective struct {
+	eval *evaluator
+	side float64
 }
 
 func main() {
@@ -384,14 +393,30 @@ func (cfg *config) precompute() {
 
 func newEvaluator(cfg *config) *evaluator {
 	return &evaluator{
-		cfg:        cfg,
-		polys:      make([]point, cfg.innerPolygons*cfg.innerSides),
-		vectors:    make([]point, cfg.innerPolygons*cfg.innerSides),
-		cells:      make([]gridCell, cfg.innerPolygons),
-		nextInCell: make([]int, cfg.innerPolygons),
-		cellHeads:  make(map[gridCell]int, cfg.innerPolygons),
-		usedCells:  make([]gridCell, 0, cfg.innerPolygons),
+		cfg:              cfg,
+		polys:            make([]point, cfg.innerPolygons*cfg.innerSides),
+		vectors:          make([]point, cfg.innerPolygons*cfg.innerSides),
+		cells:            make([]gridCell, cfg.innerPolygons),
+		nextInCell:       make([]int, cfg.innerPolygons),
+		cellHeads:        make(map[gridCell]int, cfg.innerPolygons),
+		usedCells:        make([]gridCell, 0, cfg.innerPolygons),
+		polygonPenalties: make([]float64, cfg.innerPolygons),
 	}
+}
+
+func newPackingObjective(cfg *config, side float64) *packingObjective {
+	return &packingObjective{
+		eval: newEvaluator(cfg),
+		side: side,
+	}
+}
+
+func (o *packingObjective) value(values []float64) float64 {
+	return o.eval.value(values, o.side)
+}
+
+func (o *packingObjective) gradient(values []float64, f0 float64, gradient []float64, maxEvals int) int {
+	return o.eval.finiteDifferenceGradient(values, o.side, f0, gradient, maxEvals)
 }
 
 func runAttempts(cfg *config) []attemptResult {
@@ -434,13 +459,11 @@ func repetition(seed int, cfg *config) attemptResult {
 	x0 := initialValues(rng, cfg, dynamicSide)
 	lastValidX := slices.Clone(x0)
 	lastValidSide := dynamicSide
-	eval := newEvaluator(cfg)
 
 	for {
 		sideForObjective := dynamicSide
-		minimized := minimizeLBFGS(x0, func(x []float64) float64 {
-			return eval.value(x, sideForObjective)
-		}, 1e-8)
+		objective := newPackingObjective(cfg, sideForObjective)
+		minimized := minimizeLBFGSWithGradient(x0, objective.value, objective.gradient, 1e-8)
 
 		multiplier := 1 - cfg.finalStepSize - (dynamicSide-lowestSide)*(0.01-cfg.finalStepSize)/sideRange
 		if minimized.fun < cfg.penaltyTolerance {
@@ -451,9 +474,7 @@ func repetition(seed int, cfg *config) attemptResult {
 			continue
 		}
 
-		basinResult := basinHopping(minimized, func(x []float64) float64 {
-			return eval.value(x, sideForObjective)
-		}, rng)
+		basinResult := basinHopping(minimized, objective.value, objective.gradient, rng)
 		if basinResult.fun < cfg.penaltyTolerance {
 			lastValidX = slices.Clone(basinResult.x)
 			lastValidSide = dynamicSide
@@ -618,6 +639,135 @@ func (e *evaluator) value(values []float64, side float64) float64 {
 	}
 
 	return penalty
+}
+
+func (e *evaluator) finiteDifferenceGradient(values []float64, side float64, f0 float64, gradient []float64, maxEvals int) int {
+	if e.cfg.innerPolygons >= spatialGridThreshold {
+		return finiteDifferenceGradient(func(x []float64) float64 {
+			return e.value(x, side)
+		}, values, f0, gradient, maxEvals)
+	}
+	return e.incrementalFiniteDifferenceGradient(values, side, f0, gradient, maxEvals)
+}
+
+func (e *evaluator) incrementalFiniteDifferenceGradient(values []float64, side float64, f0 float64, gradient []float64, maxEvals int) int {
+	if maxEvals <= 0 {
+		for i := range gradient {
+			gradient[i] = 0
+		}
+		return 0
+	}
+
+	e.valueWithPairPenalties(values, side)
+
+	cfg := e.cfg
+	innerSides := cfg.innerSides
+	containerLimit := cfg.unitContainerApothem * side
+	evals := 0
+	for i := range values {
+		if evals >= maxEvals {
+			for j := i; j < len(values); j++ {
+				gradient[j] = 0
+			}
+			break
+		}
+
+		polygonIndex := i / 3
+		valueBase := polygonIndex * 3
+		polygonBase := polygonIndex * innerSides
+		polygon := e.polys[polygonBase : polygonBase+innerSides]
+		vectors := e.vectors[polygonBase : polygonBase+innerSides]
+
+		original := values[i]
+		values[i] = original + lbfgsGradientEps
+		polygonPenalty := transformPolygonAndVectors(
+			values[valueBase],
+			values[valueBase+1],
+			values[valueBase+2],
+			cfg,
+			containerLimit,
+			polygon,
+			vectors,
+		)
+
+		delta := polygonPenalty - e.polygonPenalties[polygonIndex]
+		for other := 0; other < cfg.innerPolygons; other++ {
+			if other == polygonIndex {
+				continue
+			}
+			a := polygonIndex
+			b := other
+			if b < a {
+				a, b = b, a
+			}
+			delta += e.pairPenalty(values, a, b) - e.pairPenalties[pairPenaltyIndex(a, b, cfg.innerPolygons)]
+		}
+
+		values[i] = original
+		transformPolygonAndVectors(
+			values[valueBase],
+			values[valueBase+1],
+			values[valueBase+2],
+			cfg,
+			containerLimit,
+			polygon,
+			vectors,
+		)
+
+		f1 := f0 + delta
+		if isFinite(f1) {
+			gradient[i] = (f1 - f0) / lbfgsGradientEps
+		} else {
+			gradient[i] = 0
+		}
+		evals++
+	}
+	return evals
+}
+
+func (e *evaluator) valueWithPairPenalties(values []float64, side float64) float64 {
+	cfg := e.cfg
+	innerSides := cfg.innerSides
+	containerLimit := cfg.unitContainerApothem * side
+	penalty := 0.0
+	for i := 0; i < cfg.innerPolygons; i++ {
+		base := i * innerSides
+		valueBase := i * 3
+		polygonPenalty := transformPolygonAndVectors(
+			values[valueBase],
+			values[valueBase+1],
+			values[valueBase+2],
+			cfg,
+			containerLimit,
+			e.polys[base:base+innerSides],
+			e.vectors[base:base+innerSides],
+		)
+		e.polygonPenalties[i] = polygonPenalty
+		penalty += polygonPenalty
+	}
+
+	e.ensurePairPenalties()
+	for i := 0; i < cfg.innerPolygons; i++ {
+		for j := i + 1; j < cfg.innerPolygons; j++ {
+			pairPenalty := e.pairPenalty(values, i, j)
+			e.pairPenalties[pairPenaltyIndex(i, j, cfg.innerPolygons)] = pairPenalty
+			penalty += pairPenalty
+		}
+	}
+	return penalty
+}
+
+func (e *evaluator) ensurePairPenalties() {
+	count := e.cfg.innerPolygons * (e.cfg.innerPolygons - 1) / 2
+	if cap(e.pairPenalties) < count {
+		e.pairPenalties = make([]float64, count)
+		return
+	}
+	e.pairPenalties = e.pairPenalties[:count]
+}
+
+func pairPenaltyIndex(i, j, count int) int {
+	return i*count - i*(i+1)/2 + j - i - 1
 }
 
 func (e *evaluator) spatialCollisionPenalty(values []float64) float64 {
@@ -824,6 +974,12 @@ func intervalOverlap(minA, maxA, minB, maxB float64) float64 {
 }
 
 func minimizeLBFGS(x0 []float64, objective func([]float64) float64, tol float64) optResult {
+	return minimizeLBFGSWithGradient(x0, objective, func(x []float64, f0 float64, gradient []float64, maxEvals int) int {
+		return finiteDifferenceGradient(objective, x, f0, gradient, maxEvals)
+	}, tol)
+}
+
+func minimizeLBFGSWithGradient(x0 []float64, objective func([]float64) float64, gradientEval gradientFunc, tol float64) optResult {
 	n := len(x0)
 	x := slices.Clone(x0)
 	fun := objective(x)
@@ -832,7 +988,12 @@ func minimizeLBFGS(x0 []float64, objective func([]float64) float64, tol float64)
 		return optResult{x: x, fun: fun, evals: evals}
 	}
 	gradient := make([]float64, n)
-	gradientEvals := finiteDifferenceGradient(objective, x, fun, gradient, lbfgsMaxFunctionEvals-evals)
+	newGradient := make([]float64, n)
+	direction := make([]float64, n)
+	trial := make([]float64, n)
+	newX := make([]float64, n)
+	alphaHistory := make([]float64, lbfgsHistorySize)
+	gradientEvals := gradientEval(x, fun, gradient, lbfgsMaxFunctionEvals-evals)
 	evals += gradientEvals
 
 	sHistory := make([][]float64, 0, lbfgsHistorySize)
@@ -845,21 +1006,20 @@ func minimizeLBFGS(x0 []float64, objective func([]float64) float64, tol float64)
 			break
 		}
 
-		direction := lbfgsDirection(gradient, sHistory, yHistory, rhoHistory)
+		lbfgsDirection(direction, gradient, sHistory, yHistory, rhoHistory, alphaHistory)
 		if dot(direction, gradient) >= 0 || !allFinite(direction) {
 			for i := range direction {
 				direction[i] = -gradient[i]
 			}
 		}
 
-		newX, newFun, lineEvals, ok := lineSearch(objective, x, fun, gradient, direction, lbfgsMaxFunctionEvals-evals)
+		newFun, lineEvals, ok := lineSearch(objective, x, fun, gradient, direction, trial, newX, lbfgsMaxFunctionEvals-evals)
 		evals += lineEvals
 		if !ok {
 			break
 		}
 
-		newGradient := make([]float64, n)
-		gradientEvals = finiteDifferenceGradient(objective, newX, newFun, newGradient, lbfgsMaxFunctionEvals-evals)
+		gradientEvals = gradientEval(newX, newFun, newGradient, lbfgsMaxFunctionEvals-evals)
 		evals += gradientEvals
 
 		step := subtract(newX, x)
@@ -880,9 +1040,9 @@ func minimizeLBFGS(x0 []float64, objective func([]float64) float64, tol float64)
 		}
 
 		relativeReduction := math.Abs(fun-newFun) / max(1, max(math.Abs(fun), math.Abs(newFun)))
-		x = newX
+		x, newX = newX, x
 		fun = newFun
-		gradient = newGradient
+		gradient, newGradient = newGradient, gradient
 		iterations++
 		if relativeReduction <= tol {
 			break
@@ -915,12 +1075,11 @@ func finiteDifferenceGradient(objective func([]float64) float64, x []float64, f0
 	return evals
 }
 
-func lbfgsDirection(gradient []float64, sHistory, yHistory [][]float64, rhoHistory []float64) []float64 {
-	q := slices.Clone(gradient)
-	alpha := make([]float64, len(sHistory))
+func lbfgsDirection(direction, gradient []float64, sHistory, yHistory [][]float64, rhoHistory, alpha []float64) {
+	copy(direction, gradient)
 	for i := len(sHistory) - 1; i >= 0; i-- {
-		alpha[i] = rhoHistory[i] * dot(sHistory[i], q)
-		axpy(q, yHistory[i], -alpha[i])
+		alpha[i] = rhoHistory[i] * dot(sHistory[i], direction)
+		axpy(direction, yHistory[i], -alpha[i])
 	}
 
 	scale := 1.0
@@ -933,31 +1092,27 @@ func lbfgsDirection(gradient []float64, sHistory, yHistory [][]float64, rhoHisto
 		}
 	}
 
-	r := make([]float64, len(q))
-	for i := range q {
-		r[i] = q[i] * scale
+	for i := range direction {
+		direction[i] *= scale
 	}
 	for i := 0; i < len(sHistory); i++ {
-		beta := rhoHistory[i] * dot(yHistory[i], r)
-		axpy(r, sHistory[i], alpha[i]-beta)
+		beta := rhoHistory[i] * dot(yHistory[i], direction)
+		axpy(direction, sHistory[i], alpha[i]-beta)
 	}
-	for i := range r {
-		r[i] = -r[i]
+	for i := range direction {
+		direction[i] = -direction[i]
 	}
-	return r
 }
 
-func lineSearch(objective func([]float64) float64, x []float64, f0 float64, gradient []float64, direction []float64, maxEvals int) ([]float64, float64, int, bool) {
+func lineSearch(objective func([]float64) float64, x []float64, f0 float64, gradient []float64, direction []float64, trial []float64, bestX []float64, maxEvals int) (float64, int, bool) {
 	derivative := dot(gradient, direction)
 	if derivative >= 0 || !isFinite(derivative) || maxEvals <= 0 {
-		return nil, 0, 0, false
+		return 0, 0, false
 	}
 
 	const armijo = 1e-4
 	step := 1.0
 	evals := 0
-	trial := make([]float64, len(x))
-	var bestX []float64
 	bestFun := f0
 	improved := false
 
@@ -969,27 +1124,25 @@ func lineSearch(objective func([]float64) float64, x []float64, f0 float64, grad
 		evals++
 		if isFinite(trialFun) {
 			if trialFun < bestFun {
-				if bestX == nil {
-					bestX = make([]float64, len(x))
-				}
 				copy(bestX, trial)
 				bestFun = trialFun
 				improved = true
 			}
 			if trialFun <= f0+armijo*step*derivative {
-				return trial, trialFun, evals, true
+				copy(bestX, trial)
+				return trialFun, evals, true
 			}
 		}
 		step *= 0.5
 	}
 
 	if improved {
-		return bestX, bestFun, evals, true
+		return bestFun, evals, true
 	}
-	return nil, 0, evals, false
+	return 0, evals, false
 }
 
-func basinHopping(current optResult, objective func([]float64) float64, rng *rand.Rand) optResult {
+func basinHopping(current optResult, objective func([]float64) float64, gradientEval gradientFunc, rng *rand.Rand) optResult {
 	best := optResult{
 		x:          slices.Clone(current.x),
 		fun:        current.fun,
@@ -1003,7 +1156,7 @@ func basinHopping(current optResult, objective func([]float64) float64, rng *ran
 			trial[j] += (rng.Float64()*2 - 1) * basinHoppingStepSize
 		}
 
-		minimized := minimizeLBFGS(trial, objective, 1e-8)
+		minimized := minimizeLBFGSWithGradient(trial, objective, gradientEval, 1e-8)
 		delta := minimized.fun - current.fun
 		if delta < 0 || rng.Float64() < math.Exp(-delta/basinHoppingTemp) {
 			current = minimized

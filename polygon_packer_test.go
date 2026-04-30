@@ -114,6 +114,41 @@ func TestSpatialPenaltyMatchesBruteForceReference(t *testing.T) {
 	}
 }
 
+func TestIncrementalGradientMatchesFiniteDifference(t *testing.T) {
+	cfg, err := parseArgs([]string{"6", "5", "7", "--attempts", "1"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	values := []float64{
+		-1.2, -0.9, 0.2,
+		0.2, -0.8, 0.9,
+		1.1, -0.6, 1.3,
+		-0.7, 0.4, 2.0,
+		0.6, 0.5, 2.7,
+		1.4, 0.7, 3.1,
+	}
+	side := 3.2
+
+	referenceEval := newEvaluator(cfg)
+	f0 := referenceEval.value(values, side)
+	want := make([]float64, len(values))
+	finiteDifferenceGradient(func(x []float64) float64 {
+		return referenceEval.value(x, side)
+	}, values, f0, want, len(values))
+
+	incrementalEval := newEvaluator(cfg)
+	got := make([]float64, len(values))
+	incrementalEval.finiteDifferenceGradient(values, side, f0, got, len(values))
+
+	for i := range got {
+		diff := math.Abs(got[i] - want[i])
+		tolerance := 1e-7 * (1 + max(math.Abs(got[i]), math.Abs(want[i])))
+		if diff > tolerance {
+			t.Fatalf("gradient[%d] = %g, want %g, diff %g", i, got[i], want[i], diff)
+		}
+	}
+}
+
 func TestPlotRotationAlignsCommonContainerEdges(t *testing.T) {
 	cfg, err := parseArgs([]string{"1", "3", "3", "--attempts", "1"})
 	if err != nil {
@@ -236,6 +271,7 @@ func bruteProjectPolygon(vertices []point, axisX, axisY float64) (float64, float
 }
 
 var benchmarkPenalty float64
+var benchmarkOptResult optResult
 
 func BenchmarkEvaluatorValue(b *testing.B) {
 	cfg, err := parseArgs([]string{"8", "6", "8", "--attempts", "1"})
@@ -259,6 +295,31 @@ func BenchmarkEvaluatorValue(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		benchmarkPenalty = eval.value(values, side)
+	}
+}
+
+func BenchmarkMinimizeLBFGS(b *testing.B) {
+	cfg, err := parseArgs([]string{"8", "6", "8", "--attempts", "1"})
+	if err != nil {
+		b.Fatalf("parseArgs returned error: %v", err)
+	}
+	values := []float64{
+		-1.8, -1.4, 0.1,
+		0.1, -1.3, 0.7,
+		1.6, -1.2, 1.2,
+		-1.2, 0.2, 2.1,
+		0.7, 0.1, 2.8,
+		2.0, 0.4, 3.4,
+		-0.4, 1.6, 4.1,
+		1.5, 1.7, 5.2,
+	}
+	side := 4.2
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		objective := newPackingObjective(cfg, side)
+		benchmarkOptResult = minimizeLBFGSWithGradient(values, objective.value, objective.gradient, 1e-8)
 	}
 }
 
