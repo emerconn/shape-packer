@@ -14,9 +14,9 @@ RUN go mod download
 COPY . .
 
 RUN if [ "$MODE" = "slim" ]; then \
-    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-s -w -X main.version=${VERSION}" -trimpath -o polygon-packer . ; \
+    CGO_ENABLED=0 GOAMD64=v3 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-s -w -X main.version=${VERSION}" -trimpath -o polygon-packer . ; \
     else \
-    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-X main.version=${VERSION}" -o polygon-packer . ; \
+    CGO_ENABLED=0 GOAMD64=v3 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-X main.version=${VERSION}" -o polygon-packer . ; \
     fi
 
 
