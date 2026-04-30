@@ -27,7 +27,7 @@ Optional parameters:
 - `--attempts`: the total number of attempts to run. Increase to explore more possible packings. Defaults to 1000.
 - `--tolerance`: the tolerance for the penalty function. More penalty reduces the margin of overlap but limits exporation. Defaults to an empirical sweetspot of 0.00000001.
 - `--finalstep`: the container size is decreased by a smaller factor each time, to save compute at the beginning and achieve greater precision near the end. This sets the step size of the shrinkage which would correspond to the theoretical minimum container size (which, for most packings, will not actually be reached, so keep that in mind when setting this parameter). Defaults to 0.0001.
-- `--cloudprofiler`: sends runtime profiles to Google Cloud Profiler. This is also enabled automatically on Cloud Run jobs and services when `CLOUD_RUN_JOB` or `K_SERVICE` is present.
+- `--cpuprofile`: writes a local `cpu.prof` file next to the output image.
 
 ### With Docker
 
@@ -46,33 +46,6 @@ go build .
 ./polygon-packer 5 6 8 --cpuprofile
 go tool pprof -http=:8080 ./polygon_packer cpu.prof
 ```
-
-### Google Cloud Profiler
-
-Cloud Profiler is enabled automatically in Cloud Run jobs because Cloud Run sets `CLOUD_RUN_JOB` in the container. You can also enable it explicitly:
-
-```bash
-./polygon-packer 5 6 8 --cloudprofiler
-```
-
-Useful environment variables:
-
-- `CLOUD_PROFILER_ENABLED=false`: disable Cloud Profiler even on Cloud Run.
-- The profiler service name is always `polygon-packer`, so separate Cloud Run jobs using this image are grouped under one profiler service.
-- `CLOUD_PROFILER_PROJECT_ID=...`: required only when running outside Google Cloud.
-- `CLOUD_PROFILER_MUTEX=true`: enable mutex contention profiling.
-- `CLOUD_PROFILER_DEBUG=true`: enable profiler agent debug logging.
-
-Before deploying, enable the Profiler API and make sure the Cloud Run job's service account has `roles/cloudprofiler.agent` if it is not already covered by your default service account grants:
-
-```bash
-gcloud services enable cloudprofiler.googleapis.com
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member "serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-  --role roles/cloudprofiler.agent
-```
-
-`--cpuprofile` writes a local `cpu.prof` file and uses Go's process-wide CPU profiler, so Cloud Profiler is skipped when `--cpuprofile` is enabled.
 
 ### Benchmark Testing
 

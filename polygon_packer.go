@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"math"
 	"math/rand"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,13 +42,12 @@ const (
 )
 
 var (
-	errHelp = errors.New("help requested")
 	version = "dev"
+	errHelp = errors.New("help requested")
 )
 
 type point struct {
-	x float64
-	y float64
+	x, y float64
 }
 
 type config struct {
@@ -91,8 +92,7 @@ type attemptResult struct {
 }
 
 type gridCell struct {
-	x int
-	y int
+	x, y int
 }
 
 func main() {
@@ -170,10 +170,11 @@ func main() {
 }
 
 func parseArgs(args []string) (*config, error) {
-	attempts := defaultAttempts
-	tolerance := defaultPenaltyTolerance
-	finalStep := defaultFinalStepSize
-	cpuProfile := false
+	cfg := &config{
+		attempts:         defaultAttempts,
+		penaltyTolerance: defaultPenaltyTolerance,
+		finalStepSize:    defaultFinalStepSize,
+	}
 	positional := make([]string, 0, 3)
 
 	for i := 0; i < len(args); i++ {
@@ -182,58 +183,25 @@ func parseArgs(args []string) (*config, error) {
 		case arg == "-h" || arg == "--help":
 			return nil, errHelp
 		case arg == "--cpuprofile":
-			cpuProfile = true
-		case arg == "--attempts":
-			i++
-			if i >= len(args) {
-				return nil, fmt.Errorf("--attempts requires a value")
-			}
-			value, err := strconv.Atoi(args[i])
+			cfg.cpuProfile = true
+		case arg == "--attempts" || strings.HasPrefix(arg, "--attempts="):
+			value, err := parseIntOption(args, &i, "--attempts")
 			if err != nil {
-				return nil, fmt.Errorf("invalid --attempts value %q: %w", args[i], err)
+				return nil, err
 			}
-			attempts = value
-		case strings.HasPrefix(arg, "--attempts="):
-			valueText := strings.TrimPrefix(arg, "--attempts=")
-			value, err := strconv.Atoi(valueText)
+			cfg.attempts = value
+		case arg == "--tolerance" || strings.HasPrefix(arg, "--tolerance="):
+			value, err := parseFloatOption(args, &i, "--tolerance")
 			if err != nil {
-				return nil, fmt.Errorf("invalid --attempts value %q: %w", valueText, err)
+				return nil, err
 			}
-			attempts = value
-		case arg == "--tolerance":
-			i++
-			if i >= len(args) {
-				return nil, fmt.Errorf("--tolerance requires a value")
-			}
-			value, err := strconv.ParseFloat(args[i], 64)
+			cfg.penaltyTolerance = value
+		case arg == "--finalstep" || strings.HasPrefix(arg, "--finalstep="):
+			value, err := parseFloatOption(args, &i, "--finalstep")
 			if err != nil {
-				return nil, fmt.Errorf("invalid --tolerance value %q: %w", args[i], err)
+				return nil, err
 			}
-			tolerance = value
-		case strings.HasPrefix(arg, "--tolerance="):
-			valueText := strings.TrimPrefix(arg, "--tolerance=")
-			value, err := strconv.ParseFloat(valueText, 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid --tolerance value %q: %w", valueText, err)
-			}
-			tolerance = value
-		case arg == "--finalstep":
-			i++
-			if i >= len(args) {
-				return nil, fmt.Errorf("--finalstep requires a value")
-			}
-			value, err := strconv.ParseFloat(args[i], 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid --finalstep value %q: %w", args[i], err)
-			}
-			finalStep = value
-		case strings.HasPrefix(arg, "--finalstep="):
-			valueText := strings.TrimPrefix(arg, "--finalstep=")
-			value, err := strconv.ParseFloat(valueText, 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid --finalstep value %q: %w", valueText, err)
-			}
-			finalStep = value
+			cfg.finalStepSize = value
 		case strings.HasPrefix(arg, "-"):
 			return nil, fmt.Errorf("unknown option %q", arg)
 		default:
@@ -245,48 +213,83 @@ func parseArgs(args []string) (*config, error) {
 		return nil, fmt.Errorf("expected 3 positional arguments, got %d", len(positional))
 	}
 
-	innerPolygons, err := strconv.Atoi(positional[0])
+	var err error
+	cfg.innerPolygons, err = parseIntArgument(positional[0], "inner polygon count")
 	if err != nil {
-		return nil, fmt.Errorf("invalid inner polygon count %q: %w", positional[0], err)
+		return nil, err
 	}
-	innerSides, err := strconv.Atoi(positional[1])
+	cfg.innerSides, err = parseIntArgument(positional[1], "inner side count")
 	if err != nil {
-		return nil, fmt.Errorf("invalid inner side count %q: %w", positional[1], err)
+		return nil, err
 	}
-	containerSides, err := strconv.Atoi(positional[2])
+	cfg.containerSides, err = parseIntArgument(positional[2], "container side count")
 	if err != nil {
-		return nil, fmt.Errorf("invalid container side count %q: %w", positional[2], err)
+		return nil, err
 	}
-	if innerPolygons <= 0 {
+	if cfg.innerPolygons <= 0 {
 		return nil, fmt.Errorf("inner polygon count must be positive")
 	}
-	if innerSides < 3 {
+	if cfg.innerSides < 3 {
 		return nil, fmt.Errorf("inner polygon side count must be at least 3")
 	}
-	if containerSides < 3 {
+	if cfg.containerSides < 3 {
 		return nil, fmt.Errorf("container polygon side count must be at least 3")
 	}
-	if attempts <= 0 {
+	if cfg.attempts <= 0 {
 		return nil, fmt.Errorf("--attempts must be positive")
 	}
-	if tolerance < 0 {
+	if cfg.penaltyTolerance < 0 {
 		return nil, fmt.Errorf("--tolerance must be non-negative")
 	}
-	if finalStep <= 0 || finalStep >= 1 {
+	if cfg.finalStepSize <= 0 || cfg.finalStepSize >= 1 {
 		return nil, fmt.Errorf("--finalstep must be between 0 and 1")
 	}
 
-	cfg := &config{
-		innerPolygons:    innerPolygons,
-		innerSides:       innerSides,
-		containerSides:   containerSides,
-		attempts:         attempts,
-		penaltyTolerance: tolerance,
-		finalStepSize:    finalStep,
-		cpuProfile:       cpuProfile,
-	}
 	cfg.precompute()
 	return cfg, nil
+}
+
+func parseIntOption(args []string, i *int, name string) (int, error) {
+	text, err := optionValue(args, i, name)
+	if err != nil {
+		return 0, err
+	}
+	value, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s value %q: %w", name, text, err)
+	}
+	return value, nil
+}
+
+func parseFloatOption(args []string, i *int, name string) (float64, error) {
+	text, err := optionValue(args, i, name)
+	if err != nil {
+		return 0, err
+	}
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s value %q: %w", name, text, err)
+	}
+	return value, nil
+}
+
+func optionValue(args []string, i *int, name string) (string, error) {
+	if value, ok := strings.CutPrefix(args[*i], name+"="); ok {
+		return value, nil
+	}
+	*i = *i + 1
+	if *i >= len(args) {
+		return "", fmt.Errorf("%s requires a value", name)
+	}
+	return args[*i], nil
+}
+
+func parseIntArgument(text, name string) (int, error) {
+	value, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q: %w", name, text, err)
+	}
+	return value, nil
 }
 
 func usage() string {
@@ -426,7 +429,7 @@ func repetition(seed int, cfg *config) attemptResult {
 	sideRange := initialSide - lowestSide
 
 	x0 := initialValues(rng, cfg, dynamicSide)
-	lastValidX := cloneFloat64s(x0)
+	lastValidX := slices.Clone(x0)
 	lastValidSide := dynamicSide
 	eval := newEvaluator(cfg)
 
@@ -438,7 +441,7 @@ func repetition(seed int, cfg *config) attemptResult {
 
 		multiplier := 1 - cfg.finalStepSize - (dynamicSide-lowestSide)*(0.01-cfg.finalStepSize)/sideRange
 		if minimized.fun < cfg.penaltyTolerance {
-			lastValidX = cloneFloat64s(minimized.x)
+			lastValidX = slices.Clone(minimized.x)
 			lastValidSide = dynamicSide
 			x0 = scaleFloat64s(minimized.x, multiplier)
 			dynamicSide *= multiplier
@@ -449,7 +452,7 @@ func repetition(seed int, cfg *config) attemptResult {
 			return eval.value(x, sideForObjective)
 		}, rng)
 		if basinResult.fun < cfg.penaltyTolerance {
-			lastValidX = cloneFloat64s(basinResult.x)
+			lastValidX = slices.Clone(basinResult.x)
 			lastValidSide = dynamicSide
 			x0 = scaleFloat64s(basinResult.x, multiplier)
 			dynamicSide *= multiplier
@@ -526,91 +529,19 @@ func (e *evaluator) value(values []float64, side float64) float64 {
 	if cfg.innerPolygons >= spatialGridThreshold {
 		penalty += e.spatialCollisionPenalty(values)
 	} else {
-		for i := 0; i < cfg.innerPolygons; i++ {
-			valueBaseI := i * 3
-			centerIX := values[valueBaseI]
-			centerIY := values[valueBaseI+1]
-			baseI := i * innerSides
-			polygonI := e.polys[baseI : baseI+innerSides]
-			vectorsI := e.vectors[baseI : baseI+innerSides]
-			for j := i + 1; j < cfg.innerPolygons; j++ {
-				valueBaseJ := j * 3
-				centerJX := values[valueBaseJ]
-				centerJY := values[valueBaseJ+1]
-				dx := centerIX - centerJX
-				dy := centerIY - centerJY
-				if dx*dx+dy*dy >= 4 {
-					continue
-				}
-
-				baseJ := j * innerSides
-				polygonJ := e.polys[baseJ : baseJ+innerSides]
-				vectorsJ := e.vectors[baseJ : baseJ+innerSides]
-				collision := true
-				minOverlap := 1e20
-
-				// For congruent regular polygons, projection width is constant across
-				// another polygon's axis family; only the center projection changes.
-				firstVectorI := vectorsI[0]
-				firstCenterProjectionJ := centerJX*firstVectorI.x + centerJY*firstVectorI.y
-				firstMinJ, firstMaxJ := projectPolygon(polygonJ, firstVectorI.x, firstVectorI.y)
-				axisIMinJ := firstMinJ - firstCenterProjectionJ
-				axisIMaxJ := firstMaxJ - firstCenterProjectionJ
-				for axis := 0; axis < innerSides; axis++ {
-					vector := vectorsI[axis]
-					axisX := vector.x
-					axisY := vector.y
-					centerProjection := centerIX*axisX + centerIY*axisY
-					minI := centerProjection + cfg.unitPolygonAxisMin
-					maxI := centerProjection + cfg.unitPolygonAxisMax
-					centerProjectionJ := centerJX*axisX + centerJY*axisY
-					minJ := centerProjectionJ + axisIMinJ
-					maxJ := centerProjectionJ + axisIMaxJ
-					overlap := intervalOverlap(minI, maxI, minJ, maxJ)
-					if overlap <= 0 {
-						collision = false
-						break
-					}
-					if overlap < minOverlap {
-						minOverlap = overlap
-					}
-				}
-				if !collision {
-					continue
-				}
-
-				firstVectorJ := vectorsJ[0]
-				firstCenterProjectionI := centerIX*firstVectorJ.x + centerIY*firstVectorJ.y
-				firstMinI, firstMaxI := projectPolygon(polygonI, firstVectorJ.x, firstVectorJ.y)
-				axisJMinI := firstMinI - firstCenterProjectionI
-				axisJMaxI := firstMaxI - firstCenterProjectionI
-				for axis := 0; axis < innerSides; axis++ {
-					vector := vectorsJ[axis]
-					axisX := vector.x
-					axisY := vector.y
-					centerProjectionI := centerIX*axisX + centerIY*axisY
-					minI := centerProjectionI + axisJMinI
-					maxI := centerProjectionI + axisJMaxI
-					centerProjection := centerJX*axisX + centerJY*axisY
-					minJ := centerProjection + cfg.unitPolygonAxisMin
-					maxJ := centerProjection + cfg.unitPolygonAxisMax
-					overlap := intervalOverlap(minI, maxI, minJ, maxJ)
-					if overlap <= 0 {
-						collision = false
-						break
-					}
-					if overlap < minOverlap {
-						minOverlap = overlap
-					}
-				}
-
-				if collision {
-					penalty += minOverlap * minOverlap
-				}
-			}
-		}
+		penalty += e.collisionPenalty(values)
 	}
 
+	return penalty
+}
+
+func (e *evaluator) collisionPenalty(values []float64) float64 {
+	penalty := 0.0
+	for i := 0; i < e.cfg.innerPolygons; i++ {
+		for j := i + 1; j < e.cfg.innerPolygons; j++ {
+			penalty += e.pairPenalty(values, i, j)
+		}
+	}
 	return penalty
 }
 
@@ -663,80 +594,65 @@ func (e *evaluator) buildSpatialGrid(values []float64) {
 
 func (e *evaluator) pairPenalty(values []float64, i, j int) float64 {
 	cfg := e.cfg
-	innerSides := cfg.innerSides
 
 	valueBaseI := i * 3
-	centerIX := values[valueBaseI]
-	centerIY := values[valueBaseI+1]
+	centerI := point{x: values[valueBaseI], y: values[valueBaseI+1]}
 	valueBaseJ := j * 3
-	centerJX := values[valueBaseJ]
-	centerJY := values[valueBaseJ+1]
+	centerJ := point{x: values[valueBaseJ], y: values[valueBaseJ+1]}
 
-	dx := centerIX - centerJX
-	dy := centerIY - centerJY
+	dx := centerI.x - centerJ.x
+	dy := centerI.y - centerJ.y
 	if dx*dx+dy*dy >= 4 {
 		return 0
 	}
 
-	baseI := i * innerSides
-	polygonI := e.polys[baseI : baseI+innerSides]
-	vectorsI := e.vectors[baseI : baseI+innerSides]
-	baseJ := j * innerSides
-	polygonJ := e.polys[baseJ : baseJ+innerSides]
-	vectorsJ := e.vectors[baseJ : baseJ+innerSides]
-	minOverlap := 1e20
-
-	// For congruent regular polygons, projection width is constant across
-	// another polygon's axis family; only the center projection changes.
-	firstVectorI := vectorsI[0]
-	firstCenterProjectionJ := centerJX*firstVectorI.x + centerJY*firstVectorI.y
-	firstMinJ, firstMaxJ := projectPolygon(polygonJ, firstVectorI.x, firstVectorI.y)
-	axisIMinJ := firstMinJ - firstCenterProjectionJ
-	axisIMaxJ := firstMaxJ - firstCenterProjectionJ
-	for axis := 0; axis < innerSides; axis++ {
-		vector := vectorsI[axis]
-		axisX := vector.x
-		axisY := vector.y
-		centerProjection := centerIX*axisX + centerIY*axisY
-		minI := centerProjection + cfg.unitPolygonAxisMin
-		maxI := centerProjection + cfg.unitPolygonAxisMax
-		centerProjectionJ := centerJX*axisX + centerJY*axisY
-		minJ := centerProjectionJ + axisIMinJ
-		maxJ := centerProjectionJ + axisIMaxJ
-		overlap := intervalOverlap(minI, maxI, minJ, maxJ)
-		if overlap <= 0 {
-			return 0
-		}
-		if overlap < minOverlap {
-			minOverlap = overlap
-		}
+	polygonI, vectorsI := e.polygon(i)
+	polygonJ, vectorsJ := e.polygon(j)
+	overlapI, ok := axisFamilyOverlap(vectorsI, polygonJ, centerI, centerJ, cfg.unitPolygonAxisMin, cfg.unitPolygonAxisMax)
+	if !ok {
+		return 0
 	}
-
-	firstVectorJ := vectorsJ[0]
-	firstCenterProjectionI := centerIX*firstVectorJ.x + centerIY*firstVectorJ.y
-	firstMinI, firstMaxI := projectPolygon(polygonI, firstVectorJ.x, firstVectorJ.y)
-	axisJMinI := firstMinI - firstCenterProjectionI
-	axisJMaxI := firstMaxI - firstCenterProjectionI
-	for axis := 0; axis < innerSides; axis++ {
-		vector := vectorsJ[axis]
-		axisX := vector.x
-		axisY := vector.y
-		centerProjectionI := centerIX*axisX + centerIY*axisY
-		minI := centerProjectionI + axisJMinI
-		maxI := centerProjectionI + axisJMaxI
-		centerProjection := centerJX*axisX + centerJY*axisY
-		minJ := centerProjection + cfg.unitPolygonAxisMin
-		maxJ := centerProjection + cfg.unitPolygonAxisMax
-		overlap := intervalOverlap(minI, maxI, minJ, maxJ)
-		if overlap <= 0 {
-			return 0
-		}
-		if overlap < minOverlap {
-			minOverlap = overlap
-		}
+	overlapJ, ok := axisFamilyOverlap(vectorsJ, polygonI, centerJ, centerI, cfg.unitPolygonAxisMin, cfg.unitPolygonAxisMax)
+	if !ok {
+		return 0
 	}
-
+	minOverlap := min(overlapI, overlapJ)
 	return minOverlap * minOverlap
+}
+
+func (e *evaluator) polygon(i int) ([]point, []point) {
+	base := i * e.cfg.innerSides
+	end := base + e.cfg.innerSides
+	return e.polys[base:end], e.vectors[base:end]
+}
+
+func axisFamilyOverlap(axes, otherPolygon []point, center, otherCenter point, ownMin, ownMax float64) (float64, bool) {
+	firstAxis := axes[0]
+	otherMin, otherMax := projectPolygon(otherPolygon, firstAxis.x, firstAxis.y)
+	otherCenterProjection := otherCenter.dot(firstAxis)
+	otherMin -= otherCenterProjection
+	otherMax -= otherCenterProjection
+
+	minOverlap := math.Inf(1)
+	for _, axis := range axes {
+		centerProjection := center.dot(axis)
+		otherCenterProjection := otherCenter.dot(axis)
+		overlap := intervalOverlap(
+			centerProjection+ownMin,
+			centerProjection+ownMax,
+			otherCenterProjection+otherMin,
+			otherCenterProjection+otherMax,
+		)
+		if overlap <= 0 {
+			return 0, false
+		}
+		minOverlap = min(minOverlap, overlap)
+	}
+	return minOverlap, true
+}
+
+func (p point) dot(other point) float64 {
+	return p.x*other.x + p.y*other.y
 }
 
 func transformPolygonAndVectors(x, y, angle float64, cfg *config, containerLimit float64, polygonOut, vectorOut []point) float64 {
@@ -795,31 +711,19 @@ func projectPolygon(vertices []point, axisX, axisY float64) (float64, float64) {
 	for i := 1; i < len(vertices); i++ {
 		vertex := vertices[i]
 		dot := vertex.x*axisX + vertex.y*axisY
-		if dot < minValue {
-			minValue = dot
-		}
-		if dot > maxValue {
-			maxValue = dot
-		}
+		minValue = min(minValue, dot)
+		maxValue = max(maxValue, dot)
 	}
 	return minValue, maxValue
 }
 
 func intervalOverlap(minA, maxA, minB, maxB float64) float64 {
-	upper := maxA
-	if maxB < upper {
-		upper = maxB
-	}
-	lower := minA
-	if minB > lower {
-		lower = minB
-	}
-	return upper - lower
+	return min(maxA, maxB) - max(minA, minB)
 }
 
 func minimizeLBFGS(x0 []float64, objective func([]float64) float64, tol float64) optResult {
 	n := len(x0)
-	x := cloneFloat64s(x0)
+	x := slices.Clone(x0)
 	fun := objective(x)
 	evals := 1
 	if fun == 0 {
@@ -873,7 +777,7 @@ func minimizeLBFGS(x0 []float64, objective func([]float64) float64, tol float64)
 			rhoHistory = append(rhoHistory, 1/ys)
 		}
 
-		relativeReduction := math.Abs(fun-newFun) / math.Max(1, math.Max(math.Abs(fun), math.Abs(newFun)))
+		relativeReduction := math.Abs(fun-newFun) / max(1, max(math.Abs(fun), math.Abs(newFun)))
 		x = newX
 		fun = newFun
 		gradient = newGradient
@@ -910,7 +814,7 @@ func finiteDifferenceGradient(objective func([]float64) float64, x []float64, f0
 }
 
 func lbfgsDirection(gradient []float64, sHistory, yHistory [][]float64, rhoHistory []float64) []float64 {
-	q := cloneFloat64s(gradient)
+	q := slices.Clone(gradient)
 	alpha := make([]float64, len(sHistory))
 	for i := len(sHistory) - 1; i >= 0; i-- {
 		alpha[i] = rhoHistory[i] * dot(sHistory[i], q)
@@ -985,14 +889,14 @@ func lineSearch(objective func([]float64) float64, x []float64, f0 float64, grad
 
 func basinHopping(current optResult, objective func([]float64) float64, rng *rand.Rand) optResult {
 	best := optResult{
-		x:          cloneFloat64s(current.x),
+		x:          slices.Clone(current.x),
 		fun:        current.fun,
 		iterations: current.iterations,
 		evals:      current.evals,
 	}
 
 	for i := 0; i < basinHoppingIterations; i++ {
-		trial := cloneFloat64s(current.x)
+		trial := slices.Clone(current.x)
 		for j := range trial {
 			trial[j] += (rng.Float64()*2 - 1) * basinHoppingStepSize
 		}
@@ -1003,7 +907,7 @@ func basinHopping(current optResult, objective func([]float64) float64, rng *ran
 			current = minimized
 			if current.fun < best.fun {
 				best = optResult{
-					x:          cloneFloat64s(current.x),
+					x:          slices.Clone(current.x),
 					fun:        current.fun,
 					iterations: current.iterations,
 					evals:      current.evals,
@@ -1029,7 +933,7 @@ func savePlot(filename string, cfg *config, side float64, values []float64, side
 	)
 
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	fillImage(img, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+	draw.Draw(img, img.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
 
 	polygons := make([][]point, cfg.innerPolygons)
 	allPoints := make([]point, 0, cfg.containerSides+cfg.innerPolygons*cfg.innerSides)
@@ -1059,7 +963,7 @@ func savePlot(filename string, cfg *config, side float64, values []float64, side
 	plotHeight := height - titleArea - margin
 	scaleX := float64(width-2*margin) / spanX
 	scaleY := float64(plotHeight-2*margin) / spanY
-	scale := math.Min(scaleX, scaleY) * 0.95
+	scale := min(scaleX, scaleY) * 0.95
 	centerX := (minX + maxX) / 2
 	centerY := (minY + maxY) / 2
 	screenPoint := func(p point) image.Point {
@@ -1108,32 +1012,15 @@ func rotatePoint(p point, cosAngle, sinAngle float64) point {
 	}
 }
 
-func fillImage(img *image.RGBA, c color.RGBA) {
-	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
-		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
-			img.SetRGBA(x, y, c)
-		}
-	}
-}
-
 func bounds(points []point) (float64, float64, float64, float64) {
-	minX := math.Inf(1)
-	maxX := math.Inf(-1)
-	minY := math.Inf(1)
-	maxY := math.Inf(-1)
-	for _, point := range points {
-		if point.x < minX {
-			minX = point.x
-		}
-		if point.x > maxX {
-			maxX = point.x
-		}
-		if point.y < minY {
-			minY = point.y
-		}
-		if point.y > maxY {
-			maxY = point.y
-		}
+	first := points[0]
+	minX, maxX := first.x, first.x
+	minY, maxY := first.y, first.y
+	for _, point := range points[1:] {
+		minX = min(minX, point.x)
+		maxX = max(maxX, point.x)
+		minY = min(minY, point.y)
+		maxY = max(maxY, point.y)
 	}
 	return minX, maxX, minY, maxY
 }
@@ -1153,19 +1040,11 @@ func fillPolygon(img *image.RGBA, polygon []image.Point, c color.RGBA) {
 	minY := polygon[0].Y
 	maxY := polygon[0].Y
 	for _, p := range polygon[1:] {
-		if p.Y < minY {
-			minY = p.Y
-		}
-		if p.Y > maxY {
-			maxY = p.Y
-		}
+		minY = min(minY, p.Y)
+		maxY = max(maxY, p.Y)
 	}
-	if minY < img.Bounds().Min.Y {
-		minY = img.Bounds().Min.Y
-	}
-	if maxY >= img.Bounds().Max.Y {
-		maxY = img.Bounds().Max.Y - 1
-	}
+	minY = max(minY, img.Bounds().Min.Y)
+	maxY = min(maxY, img.Bounds().Max.Y-1)
 
 	intersections := make([]float64, 0, len(polygon))
 	for y := minY; y <= maxY; y++ {
@@ -1179,7 +1058,7 @@ func fillPolygon(img *image.RGBA, polygon []image.Point, c color.RGBA) {
 			}
 			ay := float64(a.Y)
 			by := float64(b.Y)
-			if scanY < math.Min(ay, by) || scanY >= math.Max(ay, by) {
+			if scanY < min(ay, by) || scanY >= max(ay, by) {
 				continue
 			}
 			t := (scanY - ay) / (by - ay)
@@ -1190,12 +1069,8 @@ func fillPolygon(img *image.RGBA, polygon []image.Point, c color.RGBA) {
 		for i := 0; i+1 < len(intersections); i += 2 {
 			startX := int(math.Ceil(intersections[i]))
 			endX := int(math.Floor(intersections[i+1]))
-			if startX < img.Bounds().Min.X {
-				startX = img.Bounds().Min.X
-			}
-			if endX >= img.Bounds().Max.X {
-				endX = img.Bounds().Max.X - 1
-			}
+			startX = max(startX, img.Bounds().Min.X)
+			endX = min(endX, img.Bounds().Max.X-1)
 			for x := startX; x <= endX; x++ {
 				img.SetRGBA(x, y, c)
 			}
@@ -1321,12 +1196,6 @@ var bitmapFont = map[rune][]string{
 	':': {"00000", "01100", "01100", "00000", "01100", "01100", "00000"},
 	'-': {"00000", "00000", "00000", "11111", "00000", "00000", "00000"},
 	'+': {"00000", "00100", "00100", "11111", "00100", "00100", "00000"},
-}
-
-func cloneFloat64s(values []float64) []float64 {
-	out := make([]float64, len(values))
-	copy(out, values)
-	return out
 }
 
 func scaleFloat64s(values []float64, multiplier float64) []float64 {

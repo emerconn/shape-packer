@@ -79,7 +79,7 @@ func TestOptimizedPenaltyMatchesBruteForceReference(t *testing.T) {
 			got := eval.value(values, side)
 			want := bruteForcePenalty(cfg, values, side)
 			diff := math.Abs(got - want)
-			tolerance := 1e-9 * (1 + math.Max(math.Abs(got), math.Abs(want)))
+			tolerance := 1e-9 * (1 + max(math.Abs(got), math.Abs(want)))
 			if diff > tolerance {
 				t.Fatalf("penalty mismatch for args %v trial %d: got %g, want %g, diff %g", args, trial, got, want, diff)
 			}
@@ -107,7 +107,7 @@ func TestSpatialPenaltyMatchesBruteForceReference(t *testing.T) {
 		got := eval.value(values, side)
 		want := bruteForcePenalty(cfg, values, side)
 		diff := math.Abs(got - want)
-		tolerance := 1e-9 * (1 + math.Max(math.Abs(got), math.Abs(want)))
+		tolerance := 1e-9 * (1 + max(math.Abs(got), math.Abs(want)))
 		if diff > tolerance {
 			t.Fatalf("penalty mismatch trial %d: got %g, want %g, diff %g", trial, got, want, diff)
 		}
@@ -201,7 +201,7 @@ func bruteForcePenalty(cfg *config, values []float64, side float64) float64 {
 
 				minI, maxI := bruteProjectPolygon(polygonI, axisX, axisY)
 				minJ, maxJ := bruteProjectPolygon(polygonJ, axisX, axisY)
-				overlap := math.Min(maxI, maxJ) - math.Max(minI, minJ)
+				overlap := min(maxI, maxJ) - max(minI, minJ)
 				if overlap <= 0 {
 					collision = false
 					break
