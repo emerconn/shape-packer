@@ -81,9 +81,9 @@ jobs:
         fi
         VERSION="${{ github.event.release.tag_name || github.ref_name }}"
         if [ "${{ matrix.mode }}" = "slim" ]; then
-          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w -X main.version=${VERSION}" -trimpath -o "${output}" .
+          CGO_ENABLED=0 GOAMD64=v3 GOARM64=v8.0,lse,crypto GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -trimpath -o "${output}" .
         else
-          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-X main.version=${VERSION}" -o "${output}" .
+          CGO_ENABLED=0 GOAMD64=v3 GOARM64=v8.0,lse,crypto GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o "${output}" .
         fi
         echo "artifact=${output}" >> "$GITHUB_OUTPUT"
 
