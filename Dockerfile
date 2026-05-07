@@ -24,6 +24,6 @@ COPY --from=build /app/polygon-packer /polygon-packer
 ENTRYPOINT ["/polygon-packer"]
 
 # DEBUG RUNTIME
-FROM gcr.io/distroless/static-debian12:debug AS runtime-debug
+FROM alpine AS runtime-debug
 COPY --from=build /app/polygon-packer /polygon-packer
 ENTRYPOINT ["/polygon-packer"]
