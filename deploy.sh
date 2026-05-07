@@ -5,18 +5,18 @@
 # ==========================================
 PROJECT_ID="basic-bison-138323"
 REGION="us-south1"
-IMAGE="us-central1-docker.pkg.dev/basic-bison-138323/ghcr-proxy/emerconn/polygon-packer:v0.0.26"
+IMAGE="us-central1-docker.pkg.dev/basic-bison-138323/ghcr-proxy/emerconn/polygon-packer:v0.0.27"
 SERVICE_ACCOUNT="817010668749-compute@developer.gserviceaccount.com"
 
-ARG2="5"
-ARG3="4"
+ARG2="3"
+ARG3="8"
 
 gcloud config set project "${PROJECT_ID}"
 
 # ==========================================
 # Execution Loop
 # ==========================================
-for i in {26..26}; do
+for i in {31..50}; do
   JOB_NAME="polygon-packer-$i-$ARG2-$ARG3"
   
   echo "======================================"
