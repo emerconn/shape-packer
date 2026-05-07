@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 go run . [n] [nsi] [nsc]                          # Run with positional args
-go build -o polygon_packer .                       # Build binary
+go build -o polygon-packer .                       # Build binary
 go test -v ./...                                   # Run all tests
 go test -run TestParseArgs -v ./...                # Run single test
 go test -bench=BenchmarkEvaluatorValue -benchmem -count=3  # Benchmarks
