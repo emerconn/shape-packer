@@ -27,12 +27,14 @@ Go application implementing a 2D polygon bin-packing optimizer. All code is in `
 **Optimization pipeline**: `main()` → `runAttempts()` → `repetition()` per seed. Each repetition iteratively shrinks the container, running LBFGS minimization at each size with basin hopping to escape local minima.
 
 **Key types**:
+
 - `config` — holds all parameters and precomputed polygon geometry
 - `evaluator` — computes the penalty (objective) for a given set of polygon placements, owns the spatial grid
 - `packingObjective` — wraps evaluator for the optimizer, implementing `value()` and `gradient()`
 - `gridCell` — spatial hashing for O(n) collision detection instead of O(n²)
 
 **Optimization algorithms** (all implemented from scratch, no external libs):
+
 - `minimizeLBFGS` / `minimizeLBFGSWithGradient` — quasi-Newton optimizer with custom line search
 - `basinHopping` — perturbation-based global optimization
 - `incrementalFiniteDifferenceGradient` — efficient gradient computation that reuses unchanged polygon pairs
