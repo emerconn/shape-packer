@@ -8,6 +8,7 @@ on:
     - 'go.mod'
     - 'go.sum'
     - 'default.pgo'
+    - 'build.sh'
     - 'Dockerfile'
     - '.dockerignore'
     - '.github/workflows/test-build-release.yml'
@@ -18,6 +19,7 @@ on:
     - 'go.mod'
     - 'go.sum'
     - 'default.pgo'
+    - 'build.sh'
     - 'Dockerfile'
     - '.dockerignore'
     - '.github/workflows/test-build-release.yml'
@@ -79,12 +81,7 @@ jobs:
         if [ "${{ matrix.goos }}" = "windows" ]; then
           output="${output}.exe"
         fi
-        VERSION="${{ github.event.release.tag_name || github.ref_name }}"
-        if [ "${{ matrix.mode }}" = "slim" ]; then
-          CGO_ENABLED=0 GOAMD64=v3 GOARM64=v8.0,lse,crypto GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -trimpath -o "${output}" .
-        else
-          CGO_ENABLED=0 GOAMD64=v3 GOARM64=v8.0,lse,crypto GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o "${output}" .
-        fi
+        ./build.sh ${{ matrix.goos }} ${{ matrix.goarch }} ${{ matrix.mode }} "${output}"
         echo "artifact=${output}" >> "$GITHUB_OUTPUT"
 
     - name: Upload artifact
@@ -144,7 +141,6 @@ jobs:
         target: ${{ matrix.mode == 'debug' && 'runtime-debug' || 'runtime-slim' }}
         build-args: |
           MODE=${{ matrix.mode }}
-          VERSION=${{ github.event.release.tag_name || github.ref_name }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
 
