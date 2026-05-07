@@ -5,5 +5,5 @@
 *.TMP
 Dockerfile
 .dockerignore
-deploy.sh
+scripts/deploy.sh
 polygon-packer

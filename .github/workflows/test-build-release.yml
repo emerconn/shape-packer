@@ -8,7 +8,7 @@ on:
     - 'go.mod'
     - 'go.sum'
     - 'default.pgo'
-    - 'build.sh'
+    - 'scripts/build.sh'
     - 'Dockerfile'
     - '.dockerignore'
     - '.github/workflows/test-build-release.yml'
@@ -19,7 +19,7 @@ on:
     - 'go.mod'
     - 'go.sum'
     - 'default.pgo'
-    - 'build.sh'
+    - 'scripts/build.sh'
     - 'Dockerfile'
     - '.dockerignore'
     - '.github/workflows/test-build-release.yml'
@@ -81,7 +81,7 @@ jobs:
         if [ "${{ matrix.goos }}" = "windows" ]; then
           output="${output}.exe"
         fi
-        ./build.sh ${{ matrix.goos }} ${{ matrix.goarch }} ${{ matrix.mode }} "${output}"
+        ./scripts/build.sh ${{ matrix.goos }} ${{ matrix.goarch }} ${{ matrix.mode }} "${output}"
         echo "artifact=${output}" >> "$GITHUB_OUTPUT"
 
     - name: Upload artifact

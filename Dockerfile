@@ -12,7 +12,7 @@ RUN go mod download
 
 COPY . .
 
-RUN ./build.sh ${TARGETOS:-linux} ${TARGETARCH:-amd64} ${MODE:-slim}
+RUN ./scripts/build.sh ${TARGETOS:-linux} ${TARGETARCH:-amd64} ${MODE:-slim}
 
 # SLIM RUNTIME
 FROM scratch AS runtime-slim
