@@ -4,7 +4,7 @@ This program can quickly solve the 2D bin packing problem for any number of any 
 
 This is a fork of [Flamethrower's polygon-packer](https://github.com/Flamethr0wer/polygon-packer). All credit goes to him for the crazy math he did.
 
-My fork is an optimized version in Go, roughly 40x to 45x faster than the original Python version. Both tests are ran on the same PC (AMD Ryzen 9 5950X) under the same conditions.
+My fork is an optimized version in Go, roughly 40x to 45x faster than the original Python version. Both tests ran on the same PC (AMD Ryzen 9 5950X) under the same conditions.
 
 Optimized Go version:
 
