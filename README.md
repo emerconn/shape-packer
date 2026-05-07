@@ -1,6 +1,30 @@
-# Flamethrower's polygon packer
+# emerconn's polygon packer
 
-This program can quickly solve the 2D bin packing problem for any number of any polygons inside any other polygon! It was the tool used to find all the optimal packings under the name "Ignacio Vallejo" on [Erich's Packing Center](https://erich-friedman.github.io/packing/).
+This program can quickly solve the 2D bin packing problem for any number of any polygons inside any other polygon! It was the tool used to find all the optimal packings under the name "Emerson Connelly" on [Erich's Packing Center](https://erich-friedman.github.io/packing/).
+
+This is a fork of [Flamethrower's polygon-packer](https://github.com/Flamethr0wer/polygon-packer). All credit goes to him for the crazy math he did.
+
+My fork is an optimized version, roughly 40x faster than the original Python version.
+
+Optimized Go version:
+
+```bash
+❯ time ./polygon-packer 3 3 3
+...
+Attempt 999
+Final side length: 1.999935429205552
+./polygon-packer 3 3 3  8.95s user 1.98s system 924% cpu 1.182 total
+```
+
+Original Python version:
+
+```bash
+❯ time python3 polygon_packer.py 3 3 3
+...
+Attempt 999
+Final side length: 1.9999356632378391
+python3 polygon_packer.py 3 3 3  1414.84s user 50.07s system 3118% cpu 46.975 total
+```
 
 ## How to use
 
