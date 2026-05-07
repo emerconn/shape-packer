@@ -13,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-
-	"cloud.google.com/go/profiler"
 )
 
 const (
@@ -24,15 +22,14 @@ const (
 )
 
 var (
-	version = "dev"
 	errHelp = errors.New("help requested")
 )
 
 type config struct {
-	innerPolygons  int
-	innerSides     int
-	containerSides int
-	attempts       int
+	innerPolygons    int
+	innerSides       int
+	containerSides   int
+	attempts         int
 	penaltyTolerance float64
 	finalStepSize    float64
 	cpuProfile       bool
@@ -53,15 +50,6 @@ type attemptResult struct {
 }
 
 func main() {
-	if err := profiler.Start(profiler.Config{
-		Service:        "polygon-packer",
-		ServiceVersion: version,
-		ProjectID:      "basic-bison-138323",
-		DebugLogging:   true,
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to start profiler (this is normal for local runs): %v\n", err)
-	}
-
 	cfg, err := parseArgs(os.Args[1:])
 	if err != nil {
 		if errors.Is(err, errHelp) {
