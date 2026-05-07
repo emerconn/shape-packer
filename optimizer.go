@@ -27,12 +27,6 @@ type optResult struct {
 
 type gradientFunc func(x []float64, f0 float64, gradient []float64, maxEvals int) int
 
-func minimizeLBFGS(x0 []float64, objective func([]float64) float64, tol float64) optResult {
-	return minimizeLBFGSWithGradient(x0, objective, func(x []float64, f0 float64, gradient []float64, maxEvals int) int {
-		return finiteDifferenceGradient(objective, x, f0, gradient, maxEvals)
-	}, tol)
-}
-
 func minimizeLBFGSWithGradient(x0 []float64, objective func([]float64) float64, gradientEval gradientFunc, tol float64) optResult {
 	n := len(x0)
 	x := slices.Clone(x0)
