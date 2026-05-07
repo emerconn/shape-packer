@@ -304,9 +304,15 @@ func TestUniqueFilenameWithConflict(t *testing.T) {
 func TestUniqueFilenameMultipleConflicts(t *testing.T) {
 	dir := t.TempDir()
 	base := filepath.Join(dir, "test.png")
-	os.WriteFile(base, []byte{}, 0644)
-	os.WriteFile(filepath.Join(dir, "test_1.png"), []byte{}, 0644)
-	os.WriteFile(filepath.Join(dir, "test_2.png"), []byte{}, 0644)
+	if err := os.WriteFile(base, []byte{}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "test_1.png"), []byte{}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "test_2.png"), []byte{}, 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	result := uniqueFilename(base)
 	expected := filepath.Join(dir, "test_3.png")

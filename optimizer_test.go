@@ -172,7 +172,9 @@ func TestMinimizeLBFGSWithGradientRosenbrock2D(t *testing.T) {
 	// 2D Rosenbrock: f(x,y) = (1-x)^2 + 100*(y-x^2)^2
 	// Minimum at (1,1)
 	objective := func(x []float64) float64 {
-		return math.Pow(1-x[0], 2) + 100*math.Pow(x[1]-x[0]*x[0], 2)
+		dx := 1 - x[0]
+		dy := x[1] - x[0]*x[0]
+		return dx*dx + 100*dy*dy
 	}
 	gradFn := func(x []float64, f0 float64, gradient []float64, maxEvals int) int {
 		return finiteDifferenceGradient(objective, x, f0, gradient, maxEvals)
