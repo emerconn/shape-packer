@@ -14,11 +14,10 @@ RUN go mod download
 COPY . .
 
 RUN if [ "$MODE" = "slim" ]; then \
-    CGO_ENABLED=0 GOAMD64=v3 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-s -w -X main.version=${VERSION}" -trimpath -o polygon-packer . ; \
+    CGO_ENABLED=0 GOAMD64=v3 GOARM64=v8.0,lse,crypto GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-s -w -X main.version=${VERSION}" -trimpath -o polygon-packer . ; \
     else \
-    CGO_ENABLED=0 GOAMD64=v3 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-X main.version=${VERSION}" -o polygon-packer . ; \
+    CGO_ENABLED=0 GOAMD64=v3 GOARM64=v8.0,lse,crypto GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-X main.version=${VERSION}" -o polygon-packer . ; \
     fi
-
 
 # SLIM RUNTIME
 FROM gcr.io/distroless/static AS runtime-slim
