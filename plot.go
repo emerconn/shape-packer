@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -86,7 +87,7 @@ func savePlot(filename string, cfg *config, side float64, values []float64, side
 	if err != nil {
 		return fmt.Errorf("create %s: %w", filename, err)
 	}
-	defer file.Close()
+	defer func() { err = errors.Join(err, file.Close()) }()
 	if err := png.Encode(file, img); err != nil {
 		return fmt.Errorf("write %s: %w", filename, err)
 	}
