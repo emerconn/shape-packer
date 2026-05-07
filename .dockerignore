@@ -1,5 +1,9 @@
 .git
 .github
+*.md
 *.png
 *.TMP
+Dockerfile
+.dockerignore
+deploy.sh
 polygon-packer
