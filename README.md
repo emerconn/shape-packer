@@ -34,9 +34,9 @@ Run the Go version like this:
 
 Or build a binary first:
 
-`go build -o polygon_packer .`
+`go build -o polygon-packer .`
 
-`./polygon_packer [n] [nsi] [nsc]`
+`./polygon-packer [n] [nsi] [nsc]`
 
 The original Python script can still be run like this:
 
@@ -68,7 +68,7 @@ docker run --rm \
 ```bash
 go build .
 ./polygon-packer 5 6 8 --cpuprofile
-go tool pprof -http=:8080 polygon_packer cpu.prof
+go tool pprof -http=:8080 polygon-packer cpu.prof
 ```
 
 ### Benchmark Testing

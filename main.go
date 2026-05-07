@@ -242,7 +242,7 @@ func parseIntArgument(text, name string) (int, error) {
 
 func usage() string {
 	return `Usage:
-  polygon_packer inner_polygons inner_sides container_sides [--attempts N] [--tolerance F] [--finalstep F] [--cpuprofile]
+  polygon-packer inner_polygons inner_sides container_sides [--attempts N] [--tolerance F] [--finalstep F] [--cpuprofile]
 
 Arguments:
   inner_polygons   Number of inner polygons
