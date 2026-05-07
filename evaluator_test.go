@@ -279,3 +279,199 @@ func bruteProjectPolygon(vertices []point, axisX, axisY float64) (float64, float
 	}
 	return minValue, maxValue
 }
+
+func TestPackingObjectiveValue(t *testing.T) {
+	cfg, _ := parseArgs([]string{"2", "4", "6", "--attempts", "1"})
+	obj := newPackingObjective(cfg, 5.0)
+	values := []float64{1, 0, 0, -1, 0, 0.5}
+	penalty := obj.value(values)
+	if penalty < 0 {
+		t.Fatalf("penalty = %g, want non-negative", penalty)
+	}
+
+	// Should match evaluator.value directly
+	eval := newEvaluator(cfg)
+	expected := eval.value(values, 5.0)
+	if math.Abs(penalty-expected) > 1e-12 {
+		t.Fatalf("packingObjective.value = %g, want %g", penalty, expected)
+	}
+}
+
+func TestPackingObjectiveGradient(t *testing.T) {
+	cfg, _ := parseArgs([]string{"3", "4", "6", "--attempts", "1"})
+	obj := newPackingObjective(cfg, 4.0)
+	values := []float64{0.5, 0.3, 0.1, -0.4, 0.2, 0.8, 0.1, -0.3, 1.2}
+	f0 := obj.value(values)
+	gradient := make([]float64, len(values))
+
+	evals := obj.gradient(values, f0, gradient, len(values))
+	if evals <= 0 {
+		t.Fatalf("evals = %d, want positive", evals)
+	}
+	for _, g := range gradient {
+		if math.IsNaN(g) || math.IsInf(g, 0) {
+			t.Fatalf("gradient contains NaN or Inf")
+		}
+	}
+}
+
+func TestSpatialCollisionPenaltyDirect(t *testing.T) {
+	cfg, _ := parseArgs([]string{"30", "6", "8", "--attempts", "1"})
+	eval := newEvaluator(cfg)
+	rng := rand.New(rand.NewSource(99))
+
+	values := make([]float64, cfg.innerPolygons*3)
+	for i := range cfg.innerPolygons {
+		values[i*3] = rng.Float64()*10 - 5
+		values[i*3+1] = rng.Float64()*10 - 5
+		values[i*3+2] = rng.Float64() * 2 * math.Pi
+	}
+
+	spatialPenalty := eval.spatialCollisionPenalty(values)
+	if spatialPenalty < 0 {
+		t.Fatalf("spatialCollisionPenalty = %g, want non-negative", spatialPenalty)
+	}
+}
+
+func TestBuildSpatialGrid(t *testing.T) {
+	cfg, _ := parseArgs([]string{"10", "4", "6", "--attempts", "1"})
+	eval := newEvaluator(cfg)
+	values := make([]float64, cfg.innerPolygons*3)
+	for i := range cfg.innerPolygons {
+		values[i*3] = float64(i) * 0.5
+		values[i*3+1] = float64(i) * 0.3
+		values[i*3+2] = 0
+	}
+
+	eval.buildSpatialGrid(values)
+	if len(eval.cellHeads) == 0 {
+		t.Fatal("cellHeads should not be empty after buildSpatialGrid")
+	}
+	if len(eval.usedCells) == 0 {
+		t.Fatal("usedCells should not be empty after buildSpatialGrid")
+	}
+}
+
+func TestEnsurePairPenaltiesGrowth(t *testing.T) {
+	cfg, _ := parseArgs([]string{"5", "4", "6", "--attempts", "1"})
+	eval := newEvaluator(cfg)
+
+	// Initially pairPenalties has cap 0
+	eval.ensurePairPenalties()
+	expected := 5 * 4 / 2 // 10 pairs
+	if len(eval.pairPenalties) != expected {
+		t.Fatalf("pairPenalties len = %d, want %d", len(eval.pairPenalties), expected)
+	}
+}
+
+func TestEnsurePairPenaltiesReuse(t *testing.T) {
+	cfg, _ := parseArgs([]string{"5", "4", "6", "--attempts", "1"})
+	eval := newEvaluator(cfg)
+
+	// First call allocates
+	eval.ensurePairPenalties()
+	// Second call should reuse
+	eval.ensurePairPenalties()
+	if len(eval.pairPenalties) != 10 {
+		t.Fatalf("pairPenalties len = %d, want 10", len(eval.pairPenalties))
+	}
+}
+
+func TestFiniteDifferenceGradientSpatialGridPath(t *testing.T) {
+	cfg, _ := parseArgs([]string{"100", "4", "6", "--attempts", "1"})
+	eval := newEvaluator(cfg)
+	values := make([]float64, cfg.innerPolygons*3)
+	rng := rand.New(rand.NewSource(7))
+	for i := range cfg.innerPolygons {
+		values[i*3] = rng.Float64()*10 - 5
+		values[i*3+1] = rng.Float64()*10 - 5
+		values[i*3+2] = rng.Float64() * 2 * math.Pi
+	}
+
+	side := 8.0
+	f0 := eval.value(values, side)
+	gradient := make([]float64, len(values))
+
+	evals := eval.finiteDifferenceGradient(values, side, f0, gradient, len(values))
+	if evals <= 0 {
+		t.Fatalf("evals = %d, want positive", evals)
+	}
+	for _, g := range gradient {
+		if math.IsNaN(g) || math.IsInf(g, 0) {
+			t.Fatalf("gradient contains NaN or Inf")
+		}
+	}
+}
+
+func TestFiniteDifferenceGradientZeroMaxEvals(t *testing.T) {
+	cfg, _ := parseArgs([]string{"3", "4", "6", "--attempts", "1"})
+	eval := newEvaluator(cfg)
+	values := []float64{0.5, 0.3, 0.1, -0.4, 0.2, 0.8, 0.1, -0.3, 1.2}
+	gradient := make([]float64, len(values))
+
+	evals := eval.incrementalFiniteDifferenceGradient(values, 4.0, 1.0, gradient, 0)
+	if evals != 0 {
+		t.Fatalf("evals = %d, want 0", evals)
+	}
+	for _, g := range gradient {
+		if g != 0 {
+			t.Fatalf("gradient should be all zeros, got %g", g)
+		}
+	}
+}
+
+func TestEvaluatorPenaltyOutsideContainer(t *testing.T) {
+	cfg, _ := parseArgs([]string{"1", "3", "4", "--attempts", "1"})
+	eval := newEvaluator(cfg)
+	// Place polygon far outside container
+	values := []float64{100, 100, 0}
+	penalty := eval.value(values, 1.0)
+	if penalty <= 0 {
+		t.Fatalf("penalty = %g, want positive for polygon outside container", penalty)
+	}
+}
+
+func TestEvaluatorNoOverlap(t *testing.T) {
+	cfg, _ := parseArgs([]string{"2", "3", "6", "--attempts", "1"})
+	eval := newEvaluator(cfg)
+	// Place two small polygons far apart with a large container
+	values := []float64{-5, 0, 0, 5, 0, 0}
+	penalty := eval.value(values, 10.0)
+	if penalty != 0 {
+		t.Fatalf("penalty = %g, want 0 for non-overlapping polygons in large container", penalty)
+	}
+}
+
+func TestValueWithPairPenalties(t *testing.T) {
+	cfg, _ := parseArgs([]string{"3", "4", "6", "--attempts", "1"})
+	eval := newEvaluator(cfg)
+	values := []float64{0.5, 0.5, 0, -0.5, 0.5, 1.0, 0, -0.5, 2.0}
+
+	penalty := eval.valueWithPairPenalties(values, 4.0)
+	if penalty < 0 {
+		t.Fatalf("penalty = %g, want non-negative", penalty)
+	}
+
+	// Should have stored individual penalties
+	if len(eval.polygonPenalties) != cfg.innerPolygons {
+		t.Fatalf("polygonPenalties len = %d, want %d", len(eval.polygonPenalties), cfg.innerPolygons)
+	}
+	if len(eval.pairPenalties) != cfg.innerPolygons*(cfg.innerPolygons-1)/2 {
+		t.Fatalf("pairPenalties len = %d, want %d", len(eval.pairPenalties), cfg.innerPolygons*(cfg.innerPolygons-1)/2)
+	}
+}
+
+func TestPairPenaltyDistantPolygons(t *testing.T) {
+	cfg, _ := parseArgs([]string{"2", "4", "6", "--attempts", "1"})
+	eval := newEvaluator(cfg)
+	// Place polygons very far apart (> 2 apart, so dx*dx+dy*dy >= 4)
+	values := []float64{-10, 0, 0, 10, 0, 0}
+
+	// Need to first compute the polygons via value() to populate polys/vectors
+	eval.value(values, 5.0)
+
+	pp := eval.pairPenalty(values, 0, 1)
+	if pp != 0 {
+		t.Fatalf("pairPenalty for distant polygons = %g, want 0", pp)
+	}
+}

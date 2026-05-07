@@ -1,3 +1,4 @@
 *.png
 polygon-packer
 cpu.prof*
+coverage.out
