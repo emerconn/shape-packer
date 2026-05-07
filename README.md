@@ -44,7 +44,7 @@ docker run --rm \
 ```bash
 go build .
 ./polygon-packer 5 6 8 --cpuprofile
-go tool pprof -http=:8080 ./polygon_packer cpu.prof
+go tool pprof -http=:8080 polygon_packer cpu.prof
 ```
 
 ### Benchmark Testing

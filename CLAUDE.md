@@ -16,7 +16,13 @@ Arguments: `n` = number of inner polygons, `nsi` = inner polygon sides, `nsc` = 
 
 ## Architecture
 
-Single-file Go application (`polygon_packer.go`, ~1500 lines) implementing a 2D polygon bin-packing optimizer. All code is in `package main`.
+Go application implementing a 2D polygon bin-packing optimizer. All code is in `package main`, split across files by concern:
+
+- `main.go` — entry point, config, CLI, pipeline orchestration
+- `geometry.go` — point type, polygon transforms, SAT projection helpers
+- `evaluator.go` — collision detection, spatial grid, gradient computation
+- `optimizer.go` — LBFGS, basin hopping, line search, vector math
+- `plot.go` — PNG rendering, drawing, bitmap font
 
 **Optimization pipeline**: `main()` → `runAttempts()` → `repetition()` per seed. Each repetition iteratively shrinks the container, running LBFGS minimization at each size with basin hopping to escape local minima.
 
