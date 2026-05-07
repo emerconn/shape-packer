@@ -13,7 +13,7 @@ Optimized Go version:
 ...
 Attempt 999
 Final side length: 1.999935429205552
-./polygon-packer 3 3 3  8.95s user 1.98s system 924% cpu 1.182 total
+./polygon-packer 3 3 3  8.55s user 1.90s system 950% cpu 1.099 total
 ```
 
 Original Python version:
