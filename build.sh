@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 GOOS="${1:?Usage: build.sh <goos> <goarch> <mode> [output]}"
 GOARCH="${2:?}"
