@@ -10,6 +10,7 @@ Optimized Go version:
 
 ```bash
 ❯ time ./polygon-packer 3 3 3
+Attempt 0
 ...
 Attempt 999
 Final side length: 1.999935429205552
@@ -20,6 +21,7 @@ Original Python version:
 
 ```bash
 ❯ time python3 polygon_packer.py 3 3 3
+Attempt 0
 ...
 Attempt 999
 Final side length: 1.9999356632378391
