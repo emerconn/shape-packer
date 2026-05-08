@@ -4,7 +4,7 @@
 # Configuration
 # ==========================================
 PROJECT_ID="basic-bison-138323"
-REGION="us-south1"
+REGION="us-east5" # Columbus
 IMAGE="us-central1-docker.pkg.dev/basic-bison-138323/ghcr-proxy/emerconn/polygon-packer:v0.1.3"
 SERVICE_ACCOUNT="817010668749-compute@developer.gserviceaccount.com"
 
