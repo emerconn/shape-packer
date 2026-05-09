@@ -6,4 +6,4 @@
 Dockerfile
 .dockerignore
 scripts/deploy.sh
-polygon-packer
+shape-packer

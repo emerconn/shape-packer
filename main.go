@@ -293,7 +293,7 @@ func optionValue(args []string, i *int, name string) (string, error) {
 
 func usage() string {
 	return `Usage:
-  polygon-packer --inner-count=N --inner-sides=S --outer-sides=S [options]
+  shape-packer --inner-count=N --inner-sides=S --outer-sides=S [options]
 
 Required:
   --inner-count N   Number of inner shapes
@@ -307,10 +307,10 @@ Options:
   --cpuprofile      Write a cpu.prof profile next to the output image
 
 Examples:
-  polygon-packer --inner-count=3 --inner-sides=3 --outer-sides=3
-  polygon-packer --inner-count=5 --inner-sides=c --outer-sides=c
-  polygon-packer --inner-count=4 --inner-sides=c --outer-sides=6
-  polygon-packer --inner-count=3 --inner-sides=4 --outer-sides=c
+  shape-packer --inner-count=3 --inner-sides=3 --outer-sides=3
+  shape-packer --inner-count=5 --inner-sides=c --outer-sides=c
+  shape-packer --inner-count=4 --inner-sides=c --outer-sides=6
+  shape-packer --inner-count=3 --inner-sides=4 --outer-sides=c
 `
 }
 

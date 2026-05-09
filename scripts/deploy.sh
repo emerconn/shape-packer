@@ -5,7 +5,7 @@
 # ==========================================
 PROJECT_ID="basic-bison-138323"
 REGION="us-east5" # Columbus
-IMAGE="us-central1-docker.pkg.dev/basic-bison-138323/ghcr-proxy/emerconn/polygon-packer:v0.2.0"
+IMAGE="us-central1-docker.pkg.dev/basic-bison-138323/ghcr-proxy/emerconn/shape-packer:v0.2.0"
 SERVICE_ACCOUNT="817010668749-compute@developer.gserviceaccount.com"
 
 COUNT_START=22
@@ -19,7 +19,7 @@ gcloud config set project "${PROJECT_ID}"
 # Execution Loop
 # ==========================================
 for i in $(seq ${COUNT_START} ${COUNT_END}); do
-  JOB_NAME="polygon-packer-$i-$INNER_SIDES-$OUTER_SIDES"
+  JOB_NAME="shape-packer-$i-$INNER_SIDES-$OUTER_SIDES"
   
   echo "======================================"
   echo "Processing: $JOB_NAME"

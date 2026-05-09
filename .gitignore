@@ -1,6 +1,6 @@
 ### LOCAL ###
 *.png
-polygon-packer
+shape-packer
 
 ### GO ###
 # Binaries for programs and plugins

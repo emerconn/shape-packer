@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 go run . --inner-count=3 --inner-sides=3 --outer-sides=3   # Run with flags
-go build -o polygon-packer .                                # Build binary
+go build -o shape-packer .                                # Build binary
 go test -v ./...                                            # Run all tests
 go test -run TestParseArgs -v ./...                          # Run single test
 go test -bench=BenchmarkEvaluatorValue -benchmem -count=3   # Benchmarks
@@ -55,6 +55,6 @@ Go application implementing a 2D shape bin-packing optimizer. Supports four inne
 
 ## Deployment
 
-- Docker images at `ghcr.io/emerconn/polygon-packer` (multi-arch, slim + debug variants)
+- Docker images at `ghcr.io/emerconn/shape-packer` (multi-arch, slim + debug variants)
 - `deploy.sh` creates Google Cloud Run jobs for batch processing across polygon counts
 - CI/CD via `.github/workflows/test-build-release.yml` — tests, cross-compile, container build, and GitHub release

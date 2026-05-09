@@ -265,7 +265,7 @@ func TestParseArgsPolygonInCircle(t *testing.T) {
 
 func TestUsage(t *testing.T) {
 	s := usage()
-	if !strings.Contains(s, "polygon-packer") {
+	if !strings.Contains(s, "shape-packer") {
 		t.Fatal("usage() should contain program name")
 	}
 	if !strings.Contains(s, "--inner-sides") {
