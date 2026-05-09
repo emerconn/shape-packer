@@ -7,10 +7,9 @@ on:
     - '**.go'
     - 'go.mod'
     - 'go.sum'
-    - 'default.pgo'
-    - 'scripts/build.sh'
     - 'Dockerfile'
     - '.dockerignore'
+    - 'scripts/build.sh'
     - '.github/workflows/test-build-release.yml'
   pull_request:
     branches: [ '*' ]
@@ -18,10 +17,9 @@ on:
     - '**.go'
     - 'go.mod'
     - 'go.sum'
-    - 'default.pgo'
-    - 'scripts/build.sh'
     - 'Dockerfile'
     - '.dockerignore'
+    - 'scripts/build.sh'
     - '.github/workflows/test-build-release.yml'
   release:
     types: [ created ]
