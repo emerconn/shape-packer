@@ -1,4 +1,4 @@
-# emerconn's shape packer
+# Shape Packer
 
 This program solves the 2D bin packing problem for shapes inside containers. It supports **polygons and circles** in any combination — polygons in polygons, circles in circles, polygons in circles, and circles in polygons. It was the tool used to find all the optimal packings under the name "Emerson Connelly" on [Erich's Packing Center](https://erich-friedman.github.io/packing/).
 
