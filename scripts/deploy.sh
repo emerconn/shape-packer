@@ -5,19 +5,21 @@
 # ==========================================
 PROJECT_ID="basic-bison-138323"
 REGION="us-east5" # Columbus
-IMAGE="us-central1-docker.pkg.dev/basic-bison-138323/ghcr-proxy/emerconn/polygon-packer:v0.1.3"
+IMAGE="us-central1-docker.pkg.dev/basic-bison-138323/ghcr-proxy/emerconn/polygon-packer:v0.2.0"
 SERVICE_ACCOUNT="817010668749-compute@developer.gserviceaccount.com"
 
-ARG2="3"
-ARG3="8"
+COUNT_START=22
+COUNT_END=50
+INNER_SIDES="c"
+OUTER_SIDES="c"
 
 gcloud config set project "${PROJECT_ID}"
 
 # ==========================================
 # Execution Loop
 # ==========================================
-for i in {31..50}; do
-  JOB_NAME="polygon-packer-$i-$ARG2-$ARG3"
+for i in $(seq ${COUNT_START} ${COUNT_END}); do
+  JOB_NAME="polygon-packer-$i-$INNER_SIDES-$OUTER_SIDES"
   
   echo "======================================"
   echo "Processing: $JOB_NAME"
@@ -39,9 +41,9 @@ spec:
           containers:
           - image: ${IMAGE}
             args:
-            - "${i}"
-            - "${ARG2}"
-            - "${ARG3}"
+            - "--inner-count=${i}"
+            - "--inner-sides=${INNER_SIDES}"
+            - "--outer-sides=${OUTER_SIDES}"
             env:
             - name: OUTPUT_DIR
               value: /mnt/data
