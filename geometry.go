@@ -71,8 +71,11 @@ func rotatePoints(points []point, cosAngle, sinAngle float64) {
 	}
 }
 
-func plotRotation(containerSides int) (float64, float64) {
-	angle := math.Pi/2 - math.Pi/float64(containerSides)
+func plotRotation(cfg *config) (float64, float64) {
+	if cfg.outerIsCircle() {
+		return 1.0, 0.0
+	}
+	angle := math.Pi/2 - math.Pi/float64(cfg.containerSides)
 	return math.Cos(angle), math.Sin(angle)
 }
 
@@ -93,6 +96,48 @@ func projectPolygon(vertices []point, axisX, axisY float64) (float64, float64) {
 
 func intervalOverlap(minA, maxA, minB, maxB float64) float64 {
 	return min(maxA, maxB) - max(minA, minB)
+}
+
+func circleInPolygonPenalty(cx, cy, radius float64, containerVectors []point, containerLimit float64) float64 {
+	penalty := 0.0
+	for _, v := range containerVectors {
+		projection := cx*v.x + cy*v.y
+		if projection+radius > containerLimit {
+			diff := projection + radius - containerLimit
+			penalty += diff * diff
+		}
+	}
+	return penalty
+}
+
+func circleInCirclePenalty(cx, cy, radius float64, containerRadius float64) float64 {
+	dist := math.Sqrt(cx*cx + cy*cy)
+	if dist+radius > containerRadius {
+		diff := dist + radius - containerRadius
+		return diff * diff
+	}
+	return 0
+}
+
+func polygonInCirclePenalty(vertices []point, containerRadius float64) float64 {
+	penalty := 0.0
+	for _, v := range vertices {
+		dist := math.Sqrt(v.x*v.x + v.y*v.y)
+		if dist > containerRadius {
+			diff := dist - containerRadius
+			penalty += diff * diff
+		}
+	}
+	return penalty
+}
+
+func circlePoints(cx, cy, radius float64, n int) []point {
+	points := make([]point, n)
+	for i := range n {
+		angle := 2 * math.Pi * float64(i) / float64(n)
+		points[i] = point{x: cx + radius*math.Cos(angle), y: cy + radius*math.Sin(angle)}
+	}
+	return points
 }
 
 func bounds(points []point) (float64, float64, float64, float64) {

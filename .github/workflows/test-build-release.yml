@@ -33,7 +33,7 @@ permissions:
 
 jobs:
   lint:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
     - name: Set up Go
@@ -44,7 +44,7 @@ jobs:
       uses: golangci/golangci-lint-action@v9
 
   test:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
     - name: Set up Go

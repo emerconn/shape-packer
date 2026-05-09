@@ -12,11 +12,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 var outputScales = [...]int{1, 2, 4, 6}
 
-func savePlot(filename string, cfg *config, side float64, values []float64, sideLength float64, outputScale int) error {
+const circleRenderSegments = 64
+
+func savePlot(filename string, cfg *config, side float64, values []float64, sizeLabel string, sizeValue float64, outputScale int) error {
 	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
 		return fmt.Errorf("create directory %s: %w", filepath.Dir(filename), err)
 	}
@@ -35,20 +38,32 @@ func savePlot(filename string, cfg *config, side float64, values []float64, side
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	draw.Draw(img, img.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
 
-	polygons := make([][]point, cfg.innerPolygons)
-	allPoints := make([]point, 0, cfg.containerSides+cfg.innerPolygons*cfg.innerSides)
-	plotCos, plotSin := plotRotation(cfg.containerSides)
-	container := make([]point, cfg.containerSides)
-	for i, vertex := range cfg.unitContainerVertices {
-		container[i] = rotatePoint(point{x: vertex.x * side, y: vertex.y * side}, plotCos, plotSin)
-		allPoints = append(allPoints, container[i])
+	polygons := make([][]point, cfg.innerCount)
+	var container []point
+	if cfg.outerIsPolygon() {
+		container = make([]point, cfg.containerSides)
+		for i, vertex := range cfg.unitContainerVertices {
+			container[i] = point{x: vertex.x * side, y: vertex.y * side}
+		}
+	} else {
+		container = circlePoints(0, 0, side, circleRenderSegments)
 	}
-	for i := range cfg.innerPolygons {
-		polygon := make([]point, cfg.innerSides)
-		transformPolygon(values[i*3], values[i*3+1], values[i*3+2], cfg.unitPolygonVertices, polygon)
-		rotatePoints(polygon, plotCos, plotSin)
-		polygons[i] = polygon
-		allPoints = append(allPoints, polygon...)
+	allPoints := make([]point, 0, len(container)+cfg.innerCount*max(cfg.innerSides, circleRenderSegments))
+	allPoints = append(allPoints, container...)
+	if cfg.innerIsPolygon() {
+		for i := range cfg.innerCount {
+			polygon := make([]point, cfg.innerSides)
+			transformPolygon(values[i*cfg.paramsPerShape], values[i*cfg.paramsPerShape+1], values[i*cfg.paramsPerShape+2], cfg.unitPolygonVertices, polygon)
+			polygons[i] = polygon
+			allPoints = append(allPoints, polygon...)
+		}
+	} else {
+		for i := range cfg.innerCount {
+			valueBase := i * cfg.paramsPerShape
+			circle := circlePoints(values[valueBase], values[valueBase+1], 1.0, circleRenderSegments)
+			polygons[i] = circle
+			allPoints = append(allPoints, circle...)
+		}
 	}
 
 	minX, maxX, minY, maxY := bounds(allPoints)
@@ -80,7 +95,7 @@ func savePlot(filename string, cfg *config, side float64, values []float64, side
 		drawPolyline(img, screenPolygon, true, color.RGBA{A: 255})
 	}
 
-	title := "SIDE LENGTH: " + strconv.FormatFloat(sideLength, 'g', -1, 64)
+	title := strings.ToTitle(sizeLabel) + ": " + strconv.FormatFloat(sizeValue, 'g', -1, 64)
 	drawTextCentered(img, title, width/2, 12*outputScale, 2*outputScale, color.RGBA{A: 255})
 
 	file, err := os.Create(filename)
@@ -270,4 +285,6 @@ var bitmapFont = map[rune][]string{
 	':': {"00000", "01100", "01100", "00000", "01100", "01100", "00000"},
 	'-': {"00000", "00000", "00000", "11111", "00000", "00000", "00000"},
 	'+': {"00000", "00100", "00100", "11111", "00100", "00100", "00000"},
+	'R': {"11110", "10001", "10001", "11110", "10100", "10010", "10001"},
+	'U': {"10001", "10001", "10001", "10001", "10001", "10001", "01110"},
 }
