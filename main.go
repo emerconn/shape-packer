@@ -47,7 +47,6 @@ type config struct {
 }
 
 func (c *config) innerIsPolygon() bool { return c.innerType == "polygon" }
-func (c *config) innerIsCircle() bool  { return c.innerType == "circle" }
 func (c *config) outerIsPolygon() bool { return c.outerType == "polygon" }
 func (c *config) outerIsCircle() bool  { return c.outerType == "circle" }
 
