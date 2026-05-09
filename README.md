@@ -2,7 +2,7 @@
 
 A 2D bin packer for equilateral shapes, supporting **polygons and circles** in any combination. Used to generate all submissions under the name "Emerson Connelly" on [Erich's Packing Center](https://erich-friedman.github.io/packing/).
 
-Originally forked from [Flamethr0wer's polygon-packer](https://github.com/Flamethr0wer/shape-packer). Optimized in Go to be ~40x faster than the original Python version.
+Originally forked from [Flamethr0wer's polygon-packer](https://github.com/Flamethr0wer/shape-packer). Rewritten in Go to be ~40x faster.
 
 Both tests ran on the same PC (AMD Ryzen 9 5950X) under the same conditions.
 
