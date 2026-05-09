@@ -1,4 +1,4 @@
-# Shape Packer
+# shape-packer
 
 A 2D bin packing problem for equilateral shapes, supporting **polygons and circles** in any combination. Used to generate all submissions under the name "Emerson Connelly" on [Erich's Packing Center](https://erich-friedman.github.io/packing/).
 
