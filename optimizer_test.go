@@ -326,7 +326,7 @@ func TestLbfgsDirectionWithHistory(t *testing.T) {
 }
 
 func TestMinimizeLBFGSPackingObjective(t *testing.T) {
-	cfg, _ := parseArgs([]string{"3", "4", "6", "--attempts", "1"})
+	cfg, _ := parseArgs(testPolygonArgs(3, 4, 6, "--attempts=1"))
 	objective := newPackingObjective(cfg, 3.0)
 	x0 := []float64{0.5, 0.5, 0.1, -0.5, 0.3, 0.5, 0.1, -0.4, 0.8}
 

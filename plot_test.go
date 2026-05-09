@@ -10,7 +10,7 @@ import (
 )
 
 func TestPlotRotationAlignsCommonContainerEdges(t *testing.T) {
-	cfg, err := parseArgs([]string{"1", "3", "3", "--attempts", "1"})
+	cfg, err := parseArgs(testPolygonArgs(1, 3, 3, "--attempts=1"))
 	if err != nil {
 		t.Fatalf("parseArgs returned error: %v", err)
 	}
@@ -19,7 +19,7 @@ func TestPlotRotationAlignsCommonContainerEdges(t *testing.T) {
 		t.Fatalf("rotated triangle container does not have a horizontal side: %#v", triangle)
 	}
 
-	cfg, err = parseArgs([]string{"1", "3", "4", "--attempts", "1"})
+	cfg, err = parseArgs(testPolygonArgs(1, 3, 4, "--attempts=1"))
 	if err != nil {
 		t.Fatalf("parseArgs returned error: %v", err)
 	}
@@ -30,6 +30,17 @@ func TestPlotRotationAlignsCommonContainerEdges(t *testing.T) {
 		if math.Abs(a.x-b.x) > 1e-12 && math.Abs(a.y-b.y) > 1e-12 {
 			t.Fatalf("rotated square edge %d is not horizontal or vertical: %#v -> %#v", i, a, b)
 		}
+	}
+}
+
+func TestPlotRotationCircleContainer(t *testing.T) {
+	cfg, err := parseArgs(testCircleInCircleArgs(1, "--attempts=1"))
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	cosA, sinA := plotRotation(cfg)
+	if math.Abs(cosA-1) > 1e-12 || math.Abs(sinA) > 1e-12 {
+		t.Fatalf("plotRotation for circle = (%g, %g), want (1, 0)", cosA, sinA)
 	}
 }
 
@@ -218,12 +229,27 @@ func TestToScreenPolygon(t *testing.T) {
 }
 
 func TestSavePlot(t *testing.T) {
-	cfg, _ := parseArgs([]string{"3", "4", "6", "--attempts", "1"})
+	cfg, _ := parseArgs(testPolygonArgs(3, 4, 6, "--attempts=1"))
 	values := []float64{0.5, 0.5, 0.1, -0.5, 0.3, 0.5, 0.1, -0.4, 0.8}
 	dir := t.TempDir()
 	filename := filepath.Join(dir, "test.png")
 
-	err := savePlot(filename, cfg, 2.0, values, 1.5, 1)
+	err := savePlot(filename, cfg, 2.0, values, "side length", 1.5, 1)
+	if err != nil {
+		t.Fatalf("savePlot error: %v", err)
+	}
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		t.Fatal("output file not created")
+	}
+}
+
+func TestSavePlotCircleInCircle(t *testing.T) {
+	cfg, _ := parseArgs(testCircleInCircleArgs(3, "--attempts=1"))
+	values := []float64{-0.5, -0.5, 0.5, 0.5, 0.0, -0.3}
+	dir := t.TempDir()
+	filename := filepath.Join(dir, "test.png")
+
+	err := savePlot(filename, cfg, 3.0, values, "size", 2.0, 1)
 	if err != nil {
 		t.Fatalf("savePlot error: %v", err)
 	}
@@ -233,13 +259,13 @@ func TestSavePlot(t *testing.T) {
 }
 
 func TestSavePlotMultipleScales(t *testing.T) {
-	cfg, _ := parseArgs([]string{"2", "3", "4", "--attempts", "1"})
+	cfg, _ := parseArgs(testPolygonArgs(2, 3, 4, "--attempts=1"))
 	values := []float64{0.3, 0.3, 0.5, -0.3, -0.3, 1.0}
 	dir := t.TempDir()
 
 	for _, scale := range outputScales {
 		filename := filepath.Join(dir, "test.png")
-		err := savePlot(filename, cfg, 2.0, values, 1.5, scale)
+		err := savePlot(filename, cfg, 2.0, values, "side length", 1.5, scale)
 		if err != nil {
 			t.Fatalf("savePlot scale=%d error: %v", scale, err)
 		}
@@ -247,13 +273,13 @@ func TestSavePlotMultipleScales(t *testing.T) {
 }
 
 func TestSavePlotCreatesDirectory(t *testing.T) {
-	cfg, _ := parseArgs([]string{"1", "3", "4", "--attempts", "1"})
+	cfg, _ := parseArgs(testPolygonArgs(1, 3, 4, "--attempts=1"))
 	values := []float64{0, 0, 0}
 	dir := t.TempDir()
 	nestedDir := filepath.Join(dir, "nested", "dir")
 	filename := filepath.Join(nestedDir, "test.png")
 
-	err := savePlot(filename, cfg, 2.0, values, 1.5, 1)
+	err := savePlot(filename, cfg, 2.0, values, "side length", 1.5, 1)
 	if err != nil {
 		t.Fatalf("savePlot error: %v", err)
 	}
@@ -263,7 +289,7 @@ func TestSavePlotCreatesDirectory(t *testing.T) {
 }
 
 func rotatedContainer(cfg *config) []point {
-	cosAngle, sinAngle := plotRotation(cfg.containerSides)
+	cosAngle, sinAngle := plotRotation(cfg)
 	vertices := make([]point, cfg.containerSides)
 	for i, vertex := range cfg.unitContainerVertices {
 		vertices[i] = rotatePoint(vertex, cosAngle, sinAngle)

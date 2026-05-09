@@ -25,16 +25,19 @@ type packingObjective struct {
 }
 
 func newEvaluator(cfg *config) *evaluator {
-	return &evaluator{
+	e := &evaluator{
 		cfg:              cfg,
-		polys:            make([]point, cfg.innerPolygons*cfg.innerSides),
-		vectors:          make([]point, cfg.innerPolygons*cfg.innerSides),
-		cells:            make([]gridCell, cfg.innerPolygons),
-		nextInCell:       make([]int, cfg.innerPolygons),
-		cellHeads:        make(map[gridCell]int, cfg.innerPolygons),
-		usedCells:        make([]gridCell, 0, cfg.innerPolygons),
-		polygonPenalties: make([]float64, cfg.innerPolygons),
+		cells:            make([]gridCell, cfg.innerCount),
+		nextInCell:       make([]int, cfg.innerCount),
+		cellHeads:        make(map[gridCell]int, cfg.innerCount),
+		usedCells:        make([]gridCell, 0, cfg.innerCount),
+		polygonPenalties: make([]float64, cfg.innerCount),
 	}
+	if cfg.innerIsPolygon() {
+		e.polys = make([]point, cfg.innerCount*cfg.innerSides)
+		e.vectors = make([]point, cfg.innerCount*cfg.innerSides)
+	}
+	return e
 }
 
 func newPackingObjective(cfg *config, side float64) *packingObjective {
@@ -52,33 +55,46 @@ func (o *packingObjective) gradient(values []float64, f0 float64, gradient []flo
 	return o.eval.finiteDifferenceGradient(values, o.side, f0, gradient, maxEvals)
 }
 
-func (e *evaluator) value(values []float64, side float64) float64 {
+func (e *evaluator) computeContainerPenalty(values []float64, idx int, side float64) float64 {
 	cfg := e.cfg
-	innerSides := cfg.innerSides
-	containerLimit := cfg.unitContainerApothem * side
+	valueBase := idx * cfg.paramsPerShape
 
-	penalty := 0.0
-	for i := range cfg.innerPolygons {
-		base := i * innerSides
-		valueBase := i * 3
+	if cfg.innerIsPolygon() {
+		innerSides := cfg.innerSides
+		base := idx * innerSides
 		polygon := e.polys[base : base+innerSides]
 		vectors := e.vectors[base : base+innerSides]
-		penalty += transformPolygonAndVectors(
-			values[valueBase],
-			values[valueBase+1],
-			values[valueBase+2],
-			cfg,
-			containerLimit,
-			polygon,
-			vectors,
-		)
+		if cfg.outerIsPolygon() {
+			return transformPolygonAndVectors(
+				values[valueBase], values[valueBase+1], values[valueBase+2],
+				cfg, cfg.unitContainerApothem*side, polygon, vectors,
+			)
+		}
+		transformPolygon(values[valueBase], values[valueBase+1], values[valueBase+2], cfg.unitPolygonVertices, polygon)
+		rotateVectors(values[valueBase+2], cfg.unitPolygonVectors, vectors)
+		return polygonInCirclePenalty(polygon, side)
 	}
 
-	if cfg.innerPolygons >= spatialGridThreshold {
+	cx, cy := values[valueBase], values[valueBase+1]
+	if cfg.outerIsPolygon() {
+		return circleInPolygonPenalty(cx, cy, 1.0, cfg.unitContainerVectors, cfg.unitContainerApothem*side)
+	}
+	return circleInCirclePenalty(cx, cy, 1.0, side)
+}
+
+func (e *evaluator) value(values []float64, side float64) float64 {
+	cfg := e.cfg
+	penalty := 0.0
+
+	for i := range cfg.innerCount {
+		penalty += e.computeContainerPenalty(values, i, side)
+	}
+
+	if cfg.innerCount >= spatialGridThreshold {
 		penalty += e.spatialCollisionPenalty(values)
 	} else {
-		for i := range cfg.innerPolygons {
-			for j := i + 1; j < cfg.innerPolygons; j++ {
+		for i := range cfg.innerCount {
+			for j := i + 1; j < cfg.innerCount; j++ {
 				penalty += e.pairPenalty(values, i, j)
 			}
 		}
@@ -88,7 +104,7 @@ func (e *evaluator) value(values []float64, side float64) float64 {
 }
 
 func (e *evaluator) finiteDifferenceGradient(values []float64, side float64, f0 float64, gradient []float64, maxEvals int) int {
-	if e.cfg.innerPolygons >= spatialGridThreshold {
+	if e.cfg.innerCount >= spatialGridThreshold {
 		return finiteDifferenceGradient(func(x []float64) float64 {
 			return e.value(x, side)
 		}, values, f0, gradient, maxEvals)
@@ -107,8 +123,6 @@ func (e *evaluator) incrementalFiniteDifferenceGradient(values []float64, side f
 	e.valueWithPairPenalties(values, side)
 
 	cfg := e.cfg
-	innerSides := cfg.innerSides
-	containerLimit := cfg.unitContainerApothem * side
 	evals := 0
 	for i := range values {
 		if evals >= maxEvals {
@@ -118,47 +132,27 @@ func (e *evaluator) incrementalFiniteDifferenceGradient(values []float64, side f
 			break
 		}
 
-		polygonIndex := i / 3
-		valueBase := polygonIndex * 3
-		polygonBase := polygonIndex * innerSides
-		polygon := e.polys[polygonBase : polygonBase+innerSides]
-		vectors := e.vectors[polygonBase : polygonBase+innerSides]
+		shapeIdx := i / cfg.paramsPerShape
 
 		original := values[i]
 		values[i] = original + lbfgsGradientEps
-		polygonPenalty := transformPolygonAndVectors(
-			values[valueBase],
-			values[valueBase+1],
-			values[valueBase+2],
-			cfg,
-			containerLimit,
-			polygon,
-			vectors,
-		)
+		shapePenalty := e.computeContainerPenalty(values, shapeIdx, side)
 
-		delta := polygonPenalty - e.polygonPenalties[polygonIndex]
-		for other := range cfg.innerPolygons {
-			if other == polygonIndex {
+		delta := shapePenalty - e.polygonPenalties[shapeIdx]
+		for other := range cfg.innerCount {
+			if other == shapeIdx {
 				continue
 			}
-			a := polygonIndex
+			a := shapeIdx
 			b := other
 			if b < a {
 				a, b = b, a
 			}
-			delta += e.pairPenalty(values, a, b) - e.pairPenalties[pairPenaltyIndex(a, b, cfg.innerPolygons)]
+			delta += e.pairPenalty(values, a, b) - e.pairPenalties[pairPenaltyIndex(a, b, cfg.innerCount)]
 		}
 
 		values[i] = original
-		transformPolygonAndVectors(
-			values[valueBase],
-			values[valueBase+1],
-			values[valueBase+2],
-			cfg,
-			containerLimit,
-			polygon,
-			vectors,
-		)
+		e.computeContainerPenalty(values, shapeIdx, side)
 
 		f1 := f0 + delta
 		if isFinite(f1) {
@@ -173,31 +167,19 @@ func (e *evaluator) incrementalFiniteDifferenceGradient(values []float64, side f
 
 func (e *evaluator) valueWithPairPenalties(values []float64, side float64) float64 {
 	cfg := e.cfg
-	innerSides := cfg.innerSides
-	containerLimit := cfg.unitContainerApothem * side
 	penalty := 0.0
 
-	for i := range cfg.innerPolygons {
-		base := i * innerSides
-		valueBase := i * 3
-		polygonPenalty := transformPolygonAndVectors(
-			values[valueBase],
-			values[valueBase+1],
-			values[valueBase+2],
-			cfg,
-			containerLimit,
-			e.polys[base:base+innerSides],
-			e.vectors[base:base+innerSides],
-		)
-		e.polygonPenalties[i] = polygonPenalty
-		penalty += polygonPenalty
+	for i := range cfg.innerCount {
+		shapePenalty := e.computeContainerPenalty(values, i, side)
+		e.polygonPenalties[i] = shapePenalty
+		penalty += shapePenalty
 	}
 
 	e.ensurePairPenalties()
-	for i := range cfg.innerPolygons {
-		for j := i + 1; j < cfg.innerPolygons; j++ {
+	for i := range cfg.innerCount {
+		for j := i + 1; j < cfg.innerCount; j++ {
 			pp := e.pairPenalty(values, i, j)
-			e.pairPenalties[pairPenaltyIndex(i, j, cfg.innerPolygons)] = pp
+			e.pairPenalties[pairPenaltyIndex(i, j, cfg.innerCount)] = pp
 			penalty += pp
 		}
 	}
@@ -205,7 +187,7 @@ func (e *evaluator) valueWithPairPenalties(values []float64, side float64) float
 }
 
 func (e *evaluator) ensurePairPenalties() {
-	count := e.cfg.innerPolygons * (e.cfg.innerPolygons - 1) / 2
+	count := e.cfg.innerCount * (e.cfg.innerCount - 1) / 2
 	if cap(e.pairPenalties) < count {
 		e.pairPenalties = make([]float64, count)
 		return
@@ -217,16 +199,43 @@ func pairPenaltyIndex(i, j, count int) int {
 	return i*count - i*(i+1)/2 + j - i - 1
 }
 
-// pairPenalty computes the squared minimum-overlap penalty between polygons i
-// and j using SAT. Returns 0 if they do not collide.
 func (e *evaluator) pairPenalty(values []float64, i, j int) float64 {
+	if e.cfg.innerIsPolygon() {
+		return e.polygonPairPenalty(values, i, j)
+	}
+	return e.circlePairPenalty(values, i, j)
+}
+
+func (e *evaluator) circlePairPenalty(values []float64, i, j int) float64 {
+	cfg := e.cfg
+	valueBaseI := i * cfg.paramsPerShape
+	valueBaseJ := j * cfg.paramsPerShape
+	cx1, cy1 := values[valueBaseI], values[valueBaseI+1]
+	cx2, cy2 := values[valueBaseJ], values[valueBaseJ+1]
+
+	dx := cx1 - cx2
+	dy := cy1 - cy2
+	distSq := dx*dx + dy*dy
+	if distSq >= 4 {
+		return 0
+	}
+
+	dist := math.Sqrt(distSq)
+	overlap := 2.0 - dist
+	if overlap <= 0 {
+		return 0
+	}
+	return overlap * overlap
+}
+
+func (e *evaluator) polygonPairPenalty(values []float64, i, j int) float64 {
 	cfg := e.cfg
 	innerSides := cfg.innerSides
 
-	valueBaseI := i * 3
+	valueBaseI := i * cfg.paramsPerShape
 	centerIX := values[valueBaseI]
 	centerIY := values[valueBaseI+1]
-	valueBaseJ := j * 3
+	valueBaseJ := j * cfg.paramsPerShape
 	centerJX := values[valueBaseJ]
 	centerJY := values[valueBaseJ+1]
 
@@ -244,8 +253,6 @@ func (e *evaluator) pairPenalty(values []float64, i, j int) float64 {
 	vectorsJ := e.vectors[baseJ : baseJ+innerSides]
 	minOverlap := 1e20
 
-	// For congruent regular polygons, projection width is constant across
-	// another polygon's axis family; only the center projection changes.
 	firstVectorI := vectorsI[0]
 	firstCenterProjectionJ := centerJX*firstVectorI.x + centerJY*firstVectorI.y
 	firstMinJ, firstMaxJ := projectPolygon(polygonJ, firstVectorI.x, firstVectorI.y)
@@ -301,7 +308,7 @@ func (e *evaluator) spatialCollisionPenalty(values []float64) float64 {
 	e.buildSpatialGrid(values)
 
 	penalty := 0.0
-	for i := range e.cfg.innerPolygons {
+	for i := range e.cfg.innerCount {
 		cell := e.cells[i]
 		for dx := -1; dx <= 1; dx++ {
 			for dy := -1; dy <= 1; dy++ {
@@ -326,8 +333,8 @@ func (e *evaluator) buildSpatialGrid(values []float64) {
 	}
 	e.usedCells = e.usedCells[:0]
 
-	for i := range e.cfg.innerPolygons {
-		valueBase := i * 3
+	for i := range e.cfg.innerCount {
+		valueBase := i * e.cfg.paramsPerShape
 		cell := gridCell{
 			x: int(math.Floor(values[valueBase] / spatialGridCellSize)),
 			y: int(math.Floor(values[valueBase+1] / spatialGridCellSize)),
