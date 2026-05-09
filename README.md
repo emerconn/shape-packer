@@ -30,10 +30,10 @@ python3 polygon_packer.py 3 3 3  1414.84s user 50.07s system 3118% cpu 46.975 to
 
 ## How to use
 
-Build the binary:
+Build an optimized binary:
 
 ```bash
-go build -o shape-packer .
+CGO_ENABLED=0 go build -ldflags="-s -w" -trimpath .
 ```
 
 Run it:
