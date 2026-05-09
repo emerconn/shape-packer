@@ -1,12 +1,12 @@
 # Shape Packer
 
-This program solves the 2D bin packing problem for shapes inside containers. It supports **polygons and circles** in any combination — polygons in polygons, circles in circles, polygons in circles, and circles in polygons. It was the tool used to find all the optimal packings under the name "Emerson Connelly" on [Erich's Packing Center](https://erich-friedman.github.io/packing/).
+A 2D bin packing problem for equilateral shapes, supporting **polygons and circles** in any combination. Used to generate all submissions under the name "Emerson Connelly" on [Erich's Packing Center](https://erich-friedman.github.io/packing/).
 
-This repo was originally forked from [Flamethrower's shape-packer](https://github.com/Flamethr0wer/shape-packer). All credit goes to Flamethr0wer for the crazy math he did.
+Originally forked from [Flamethrower's shape-packer](https://github.com/Flamethr0wer/shape-packer). Optimized in Go to be ~40x faster than the original Python version.
 
-This repo is an optimized version in Go, roughly 40x to 45x faster than the original Python version. Both tests ran on the same PC (AMD Ryzen 9 5950X) under the same conditions.
+Both tests ran on the same PC (AMD Ryzen 9 5950X) under the same conditions.
 
-Optimized Go version:
+Go rewrite:
 
 ```bash
 ❯ time ./shape-packer --inner-count=3 --inner-sides=3 --outer-sides=3
@@ -17,7 +17,7 @@ Final side length: 1.999935429205552
 ./shape-packer --inner-count=3 --inner-sides=3 --outer-sides=3  8.55s user 1.90s system 950% cpu 1.099 total
 ```
 
-Original Python version:
+Original Python:
 
 ```bash
 ❯ time python3 polygon_packer.py 3 3 3
