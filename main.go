@@ -155,7 +155,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Error: connecting to Cloud Storage:", err)
 			os.Exit(1)
 		}
-		defer gcsClient.Close()
+		defer func() {
+			if err := gcsClient.Close(); err != nil {
+				fmt.Fprintln(os.Stderr, "Error: closing Cloud Storage client:", err)
+			}
+		}()
 		for _, outputScale := range outputScales {
 			objectName := fmt.Sprintf("%s_res%d.png", objectPrefix, outputScale)
 			url, err := uploadPlot(ctx, gcsClient, gcpBucket, objectName, cfg, bestSide, bestValues, sizeLabel, sizeValue, outputScale)
@@ -183,7 +187,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Error: connecting to Firestore:", err)
 			os.Exit(1)
 		}
-		defer fsClient.Close()
+		defer func() {
+			if err := fsClient.Close(); err != nil {
+				fmt.Fprintln(os.Stderr, "Error: closing Firestore client:", err)
+			}
+		}()
 		if err := saveRun(ctx, fsClient, cfg, sizeLabel, sizeValue, imageURLs); err != nil {
 			fmt.Fprintln(os.Stderr, "Error: saving to Firestore:", err)
 			os.Exit(1)

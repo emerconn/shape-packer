@@ -17,7 +17,7 @@ func uploadPlot(ctx context.Context, client *storage.Client, bucket, objectName 
 	writer.CacheControl = "public, max-age=31536000"
 
 	if err := savePlot(writer, cfg, side, values, sizeLabel, sizeValue, outputScale); err != nil {
-		writer.Close()
+		_ = writer.Close()
 		return "", fmt.Errorf("upload %s: %w", objectName, err)
 	}
 	if err := writer.Close(); err != nil {
