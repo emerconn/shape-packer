@@ -490,6 +490,9 @@ func repetition(seed int, cfg *config) attemptResult {
 		minimized := minimizeLBFGSWithGradient(x0, objective.value, objective.gradient, 1e-8)
 
 		multiplier := 1 - cfg.finalStepSize - (dynamicSide-lowestSide)*(0.01-cfg.finalStepSize)/sideRange
+		if multiplier >= 1.0 {
+			break
+		}
 		if minimized.fun < cfg.penaltyTolerance {
 			lastValidX = slices.Clone(minimized.x)
 			lastValidSide = dynamicSide
