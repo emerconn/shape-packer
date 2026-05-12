@@ -10,8 +10,8 @@ SERVICE_ACCOUNT="817010668749-compute@developer.gserviceaccount.com"
 
 COUNT_START=22
 COUNT_END=50
-INNER_SIDES="c"
-OUTER_SIDES="c"
+INNER_SIDES="0"
+OUTER_SIDES="0"
 
 gcloud config set project "${PROJECT_ID}"
 
@@ -45,21 +45,16 @@ spec:
             - "--inner-sides=${INNER_SIDES}"
             - "--outer-sides=${OUTER_SIDES}"
             env:
-            - name: OUTPUT_DIR
-              value: /mnt/data
+            - name: GCP_BUCKET
+              value: polygon-picker
+            - name: FIRESTORE_PROJECT
+              value: ${PROJECT_ID}
+            - name: FIRESTORE_DATABASE
+              value: shape-packer
             resources:
               limits:
                 cpu: 8000m
                 memory: 4Gi
-            volumeMounts:
-            - name: gcs-1
-              mountPath: /mnt/data
-          volumes:
-          - name: gcs-1
-            csi:
-              driver: gcsfuse.run.googleapis.com
-              volumeAttributes:
-                bucketName: polygon-picker
           maxRetries: 0
           timeoutSeconds: 604800
           serviceAccountName: ${SERVICE_ACCOUNT}

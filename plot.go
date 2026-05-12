@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -19,11 +20,7 @@ var outputScales = [...]int{1, 2, 4, 6}
 
 const circleRenderSegments = 64
 
-func savePlot(filename string, cfg *config, side float64, values []float64, sizeLabel string, sizeValue float64, outputScale int) error {
-	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
-		return fmt.Errorf("create directory %s: %w", filepath.Dir(filename), err)
-	}
-
+func savePlot(w io.Writer, cfg *config, side float64, values []float64, sizeLabel string, sizeValue float64, outputScale int) error {
 	const (
 		baseWidth     = 640
 		baseHeight    = 480
@@ -98,15 +95,24 @@ func savePlot(filename string, cfg *config, side float64, values []float64, size
 	title := strings.ToTitle(sizeLabel) + ": " + strconv.FormatFloat(sizeValue, 'g', -1, 64)
 	drawTextCentered(img, title, width/2, 12*outputScale, 2*outputScale, color.RGBA{A: 255})
 
+	if err := png.Encode(w, img); err != nil {
+		return fmt.Errorf("encode png: %w", err)
+	}
+	return nil
+}
+
+func writePlotToFile(filename string, cfg *config, side float64, values []float64, sizeLabel string, sizeValue float64, outputScale int) error {
+	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+		return fmt.Errorf("create directory %s: %w", filepath.Dir(filename), err)
+	}
+
 	file, err := os.Create(filename)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", filename, err)
 	}
 	defer func() { err = errors.Join(err, file.Close()) }()
-	if err := png.Encode(file, img); err != nil {
-		return fmt.Errorf("write %s: %w", filename, err)
-	}
-	return nil
+
+	return savePlot(file, cfg, side, values, sizeLabel, sizeValue, outputScale)
 }
 
 func toScreenPolygon(poly []point, transform func(point) image.Point) []image.Point {

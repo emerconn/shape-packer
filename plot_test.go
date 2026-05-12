@@ -234,7 +234,7 @@ func TestSavePlot(t *testing.T) {
 	dir := t.TempDir()
 	filename := filepath.Join(dir, "test.png")
 
-	err := savePlot(filename, cfg, 2.0, values, "side length", 1.5, 1)
+	err := writePlotToFile(filename, cfg, 2.0, values, "side length", 1.5, 1)
 	if err != nil {
 		t.Fatalf("savePlot error: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestSavePlotCircleInCircle(t *testing.T) {
 	dir := t.TempDir()
 	filename := filepath.Join(dir, "test.png")
 
-	err := savePlot(filename, cfg, 3.0, values, "size", 2.0, 1)
+	err := writePlotToFile(filename, cfg, 3.0, values, "size", 2.0, 1)
 	if err != nil {
 		t.Fatalf("savePlot error: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestSavePlotMultipleScales(t *testing.T) {
 
 	for _, scale := range outputScales {
 		filename := filepath.Join(dir, "test.png")
-		err := savePlot(filename, cfg, 2.0, values, "side length", 1.5, scale)
+		err := writePlotToFile(filename, cfg, 2.0, values, "side length", 1.5, scale)
 		if err != nil {
 			t.Fatalf("savePlot scale=%d error: %v", scale, err)
 		}
@@ -279,7 +279,7 @@ func TestSavePlotCreatesDirectory(t *testing.T) {
 	nestedDir := filepath.Join(dir, "nested", "dir")
 	filename := filepath.Join(nestedDir, "test.png")
 
-	err := savePlot(filename, cfg, 2.0, values, "side length", 1.5, 1)
+	err := writePlotToFile(filename, cfg, 2.0, values, "side length", 1.5, 1)
 	if err != nil {
 		t.Fatalf("savePlot error: %v", err)
 	}

@@ -12,7 +12,7 @@ go test -run TestParseArgs -v ./...                          # Run single test
 go test -bench=BenchmarkEvaluatorValue -benchmem -count=3   # Benchmarks
 ```
 
-Flags: `--inner-count` (required), `--inner-sides` (required, number or `c` for circle), `--outer-sides` (required, number or `c` for circle), `--attempts`, `--tolerance`, `--finalstep`, `--cpuprofile`.
+Flags: `--inner-count` (required), `--inner-sides` (required, 0 for circle, 3+ for polygon), `--outer-sides` (required, 0 for circle, 3+ for polygon), `--attempts`, `--tolerance`, `--final-step`, `--cpu-profile`.
 
 ## Architecture
 
@@ -23,6 +23,8 @@ Go application implementing a 2D shape bin-packing optimizer. Supports four inne
 - `evaluator.go` — collision detection (SAT for polygons, distance-based for circles), spatial grid, gradient computation
 - `optimizer.go` — LBFGS, basin hopping, line search, vector math
 - `plot.go` — PNG rendering, drawing, bitmap font
+- `database.go` — Firestore client, run records, versioned document storage
+- `storage.go` — Google Cloud Storage client, plot upload to GCP bucket
 
 **Optimization pipeline**: `main()` → `runAttempts()` → `repetition()` per seed. Each repetition iteratively shrinks the container, running LBFGS minimization at each size with basin hopping to escape local minima.
 
@@ -51,7 +53,18 @@ Go application implementing a 2D shape bin-packing optimizer. Supports four inne
 - `basinHopping` — perturbation-based global optimization
 - `incrementalFiniteDifferenceGradient` — efficient gradient computation that reuses unchanged shape pairs
 
-**Output**: `savePlot()` renders the best packing as PNG files at multiple scales. Reports container side length (polygon container) or container radius (circle container), normalized to inner shape side length = 1.
+**Output**: `savePlot()` renders the best packing as PNG files at multiple scales (res1, res2, res4, res6). Reports container side length (polygon container) or container radius (circle container), normalized to inner shape side length = 1.
+
+**Output modes** (controlled by env vars, mutually exclusive):
+- Default (no env var): save PNG files to current directory
+- `OUTPUT_DIR`: save PNG files to a local directory
+- `GCP_BUCKET`: upload PNG files directly to Google Cloud Storage with `Content-Type: image/png`
+
+**Firestore database** (`database.go`): When `FIRESTORE_PROJECT` and `FIRESTORE_DATABASE` env vars are both set, results are saved to Firestore after optimization. Each run creates a versioned document:
+- Parent doc (`packings/{id}`): latest result summary + version count
+- Version subdocs (`packings/{id}/versions/`): full run history with all inputs and results
+- Document IDs use the format `{innerCount}_{innerSides}_in_{outerSides}` (e.g., `21_3_in_0`)
+- Firestore is off by default; both env vars must be set to enable
 
 ## Deployment
 
