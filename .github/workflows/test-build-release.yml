@@ -2,7 +2,7 @@ name: Test, Build and Release
 
 on:
   push:
-    branches: [ '*' ]
+    branches: [ main ]
     paths:
     - '**.go'
     - 'go.mod'
@@ -12,7 +12,7 @@ on:
     - 'scripts/build.sh'
     - '.github/workflows/test-build-release.yml'
   pull_request:
-    branches: [ '*' ]
+    branches: [ main ]
     paths:
     - '**.go'
     - 'go.mod'
