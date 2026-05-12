@@ -2,17 +2,7 @@ name: Test, Build and Release
 
 on:
   push:
-    branches: [ '*' ]
-    paths:
-    - '**.go'
-    - 'go.mod'
-    - 'go.sum'
-    - 'Dockerfile'
-    - '.dockerignore'
-    - 'scripts/build.sh'
-    - '.github/workflows/test-build-release.yml'
-  pull_request:
-    branches: [ '*' ]
+    branches: [ '**' ]
     paths:
     - '**.go'
     - 'go.mod'
@@ -115,8 +105,8 @@ jobs:
       with:
         images: ghcr.io/${{ github.repository }}
         tags: |
-          type=raw,value={{branch}},enable=${{ github.event_name != 'release' && matrix.mode == 'slim' }}
-          type=raw,value={{branch}}-debug,enable=${{ github.event_name != 'release' && matrix.mode == 'debug' }}
+          type=raw,value={{branch}},enable=${{ github.event_name == 'push' && matrix.mode == 'slim' }}
+          type=raw,value={{branch}}-debug,enable=${{ github.event_name == 'push' && matrix.mode == 'debug' }}
           type=raw,value={{tag}},enable=${{ github.event_name == 'release' && matrix.mode == 'slim' }}
           type=raw,value={{tag}}-debug,enable=${{ github.event_name == 'release' && matrix.mode == 'debug' }}
           type=raw,value=latest,enable=${{ github.event_name == 'release' && matrix.mode == 'slim' }}
