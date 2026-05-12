@@ -23,8 +23,8 @@ func testPolygonArgs(innerCount, innerSides, outerSides int, extra ...string) []
 func testCircleInCircleArgs(innerCount int, extra ...string) []string {
 	args := []string{
 		"--inner-count=" + strconv.Itoa(innerCount),
-		"--inner-sides=c",
-		"--outer-sides=c",
+		"--inner-sides=0",
+		"--outer-sides=0",
 	}
 	args = append(args, extra...)
 	return args
@@ -33,7 +33,7 @@ func testCircleInCircleArgs(innerCount int, extra ...string) []string {
 func testCircleInPolygonArgs(innerCount, outerSides int, extra ...string) []string {
 	args := []string{
 		"--inner-count=" + strconv.Itoa(innerCount),
-		"--inner-sides=c",
+		"--inner-sides=0",
 		"--outer-sides=" + strconv.Itoa(outerSides),
 	}
 	args = append(args, extra...)
@@ -44,7 +44,7 @@ func testPolygonInCircleArgs(innerCount, innerSides int, extra ...string) []stri
 	args := []string{
 		"--inner-count=" + strconv.Itoa(innerCount),
 		"--inner-sides=" + strconv.Itoa(innerSides),
-		"--outer-sides=c",
+		"--outer-sides=0",
 	}
 	args = append(args, extra...)
 	return args
@@ -53,7 +53,7 @@ func testPolygonInCircleArgs(innerCount, innerSides int, extra ...string) []stri
 func TestParseArgsAllowsOptionsAfterRequired(t *testing.T) {
 	cfg, err := parseArgs([]string{
 		"--inner-count=3", "--inner-sides=4", "--outer-sides=6",
-		"--attempts=7", "--tolerance=1e-6", "--finalstep=0.001", "--cpuprofile",
+		"--attempts=7", "--tolerance=1e-6", "--final-step=0.001", "--cpu-profile",
 	})
 	if err != nil {
 		t.Fatalf("parseArgs returned error: %v", err)
@@ -68,7 +68,7 @@ func TestParseArgsAllowsOptionsAfterRequired(t *testing.T) {
 		t.Fatalf("tolerance = %g, want 1e-6", cfg.penaltyTolerance)
 	}
 	if cfg.finalStepSize != 0.001 {
-		t.Fatalf("finalstep = %g, want 0.001", cfg.finalStepSize)
+		t.Fatalf("finalStep = %g, want 0.001", cfg.finalStepSize)
 	}
 	if !cfg.cpuProfile {
 		t.Fatalf("cpuProfile = false, want true")
@@ -87,7 +87,7 @@ func TestParseArgsDefaults(t *testing.T) {
 		t.Fatalf("tolerance = %g, want %g", cfg.penaltyTolerance, defaultPenaltyTolerance)
 	}
 	if cfg.finalStepSize != defaultFinalStepSize {
-		t.Fatalf("finalstep = %g, want %g", cfg.finalStepSize, defaultFinalStepSize)
+		t.Fatalf("finalStep = %g, want %g", cfg.finalStepSize, defaultFinalStepSize)
 	}
 	if cfg.cpuProfile {
 		t.Fatalf("cpuProfile = true, want false")
@@ -134,16 +134,20 @@ func TestParseArgsInvalidInnerPolygonCount(t *testing.T) {
 }
 
 func TestParseArgsInvalidInnerSides(t *testing.T) {
-	_, err := parseArgs(testPolygonArgs(1, 2, 4))
-	if err == nil || !strings.Contains(err.Error(), "--inner-sides must be at least 3") {
-		t.Fatalf("error = %v", err)
+	for _, val := range []int{1, 2} {
+		_, err := parseArgs(testPolygonArgs(1, val, 4))
+		if err == nil || !strings.Contains(err.Error(), "--inner-sides must be 0 (circle) or at least 3") {
+			t.Fatalf("inner-sides=%d error = %v", val, err)
+		}
 	}
 }
 
 func TestParseArgsInvalidContainerSides(t *testing.T) {
-	_, err := parseArgs(testPolygonArgs(1, 3, 2))
-	if err == nil || !strings.Contains(err.Error(), "--outer-sides must be at least 3") {
-		t.Fatalf("error = %v", err)
+	for _, val := range []int{1, 2} {
+		_, err := parseArgs(testPolygonArgs(1, 3, val))
+		if err == nil || !strings.Contains(err.Error(), "--outer-sides must be 0 (circle) or at least 3") {
+			t.Fatalf("outer-sides=%d error = %v", val, err)
+		}
 	}
 }
 
@@ -166,15 +170,15 @@ func TestParseArgsFinalStepOutOfBounds(t *testing.T) {
 		val  string
 		want string
 	}{
-		{"0", "--finalstep must be between 0 and 1"},
-		{"1", "--finalstep must be between 0 and 1"},
-		{"-0.5", "--finalstep must be between 0 and 1"},
-		{"1.5", "--finalstep must be between 0 and 1"},
+		{"0", "--final-step must be between 0 and 1"},
+		{"1", "--final-step must be between 0 and 1"},
+		{"-0.5", "--final-step must be between 0 and 1"},
+		{"1.5", "--final-step must be between 0 and 1"},
 	}
 	for _, tc := range cases {
-		_, err := parseArgs(append(testPolygonArgs(1, 3, 4), "--finalstep="+tc.val))
+		_, err := parseArgs(append(testPolygonArgs(1, 3, 4), "--final-step="+tc.val))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Fatalf("finalstep=%s error = %v, want %q", tc.val, err, tc.want)
+			t.Fatalf("final-step=%s error = %v, want %q", tc.val, err, tc.want)
 		}
 	}
 }
@@ -201,9 +205,9 @@ func TestParseArgsInvalidToleranceValue(t *testing.T) {
 }
 
 func TestParseArgsInvalidFinalstepValue(t *testing.T) {
-	_, err := parseArgs(append(testPolygonArgs(1, 3, 4), "--finalstep=abc"))
+	_, err := parseArgs(append(testPolygonArgs(1, 3, 4), "--final-step=abc"))
 	if err == nil {
-		t.Fatal("expected error for non-float --finalstep")
+		t.Fatal("expected error for non-float --final-step")
 	}
 }
 
@@ -528,3 +532,4 @@ func TestStartCPUProfileStopOnce(t *testing.T) {
 		t.Fatalf("stop error: %v", err)
 	}
 }
+

@@ -44,11 +44,11 @@ Run it:
 
 ### Required flags
 
-| Flag              | Description                                                         |
-| ----------------- | ------------------------------------------------------------------- |
-| `--inner-count N` | Number of inner shapes                                              |
-| `--inner-sides S` | Inner shape: number of sides for a polygon, or `c` for a circle     |
-| `--outer-sides S` | Container shape: number of sides for a polygon, or `c` for a circle |
+| Flag              | Description                                                              |
+| ----------------- | ------------------------------------------------------------------------ |
+| `--inner-count N` | Number of inner shapes                                                   |
+| `--inner-sides S` | Inner shape: number of sides (0 for circle, 3+ for polygon)              |
+| `--outer-sides S` | Container shape: number of sides (0 for circle, 3+ for polygon)          |
 
 ### Examples
 
@@ -59,13 +59,13 @@ Polygons in polygons, circles in circles, and mixed:
 ./shape-packer --inner-count=3 --inner-sides=3 --outer-sides=3
 
 # 5 circles in a circle
-./shape-packer --inner-count=5 --inner-sides=c --outer-sides=c
+./shape-packer --inner-count=5 --inner-sides=0 --outer-sides=0
 
 # 4 circles in a hexagon
-./shape-packer --inner-count=4 --inner-sides=c --outer-sides=6
+./shape-packer --inner-count=4 --inner-sides=0 --outer-sides=6
 
 # 3 squares in a circle
-./shape-packer --inner-count=3 --inner-sides=4 --outer-sides=c
+./shape-packer --inner-count=3 --inner-sides=4 --outer-sides=0
 ```
 
 ### Output
@@ -79,8 +79,16 @@ Polygons in polygons, circles in circles, and mixed:
 | --------------- | ------- | ------------------------------------------------------------------------------------- |
 | `--attempts N`  | 1000    | Number of attempts to run. Increase to explore more packings.                         |
 | `--tolerance F` | 1e-8    | Penalty function tolerance. Lower values reduce overlap margin but limit exploration. |
-| `--finalstep F` | 0.0001  | Smallest shrink step for container size near the theoretical minimum.                 |
-| `--cpuprofile`  | off     | Write a `cpu.prof` file next to the output image.                                     |
+| `--final-step F` | 0.0001  | Smallest shrink step for container size near the theoretical minimum.                 |
+| `--cpu-profile`  | off     | Write a `cpu.prof` file next to the output image.                                     |
+| `--no-firestore`| off     | Skip saving results to Firestore.                                                     |
+
+### Environment variables
+
+| Variable       | Description                                                                              |
+| -------------- | ---------------------------------------------------------------------------------------- |
+| `OUTPUT_DIR`   | Save PNG files to a local directory (default: current directory)                         |
+| `GCP_BUCKET`   | Upload PNG files to a Google Cloud Storage bucket (mutually exclusive with `OUTPUT_DIR`) |
 
 ### With Docker
 
@@ -97,7 +105,7 @@ docker run --rm \
 
 ```bash
 go build .
-./shape-packer --inner-count=5 --inner-sides=6 --outer-sides=8 --cpuprofile
+./shape-packer --inner-count=5 --inner-sides=6 --outer-sides=8 --cpu-profile
 go tool pprof -http=:8080 shape-packer cpu.prof
 ```
 

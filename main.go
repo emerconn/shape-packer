@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -34,8 +35,8 @@ type config struct {
 	attempts         int
 	penaltyTolerance float64
 	finalStepSize    float64
-	cpuProfile       bool
-	paramsPerShape   int
+	cpuProfile     bool
+	paramsPerShape int
 
 	unitPolygonVertices   []point
 	unitPolygonVectors    []point
@@ -69,8 +70,20 @@ func main() {
 	}
 
 	outputDir := os.Getenv("OUTPUT_DIR")
-	if outputDir == "" {
+	gcpBucket := os.Getenv("GCP_BUCKET")
+	if outputDir == "" && gcpBucket == "" {
 		outputDir = "."
+	}
+	if outputDir != "" && gcpBucket != "" {
+		fmt.Fprintln(os.Stderr, "Error: OUTPUT_DIR and GCP_BUCKET cannot both be set")
+		os.Exit(2)
+	}
+
+	firestoreProject := os.Getenv("FIRESTORE_PROJECT")
+	firestoreDatabase := os.Getenv("FIRESTORE_DATABASE")
+	if (firestoreProject != "") != (firestoreDatabase != "") {
+		fmt.Fprintln(os.Stderr, "Error: FIRESTORE_PROJECT and FIRESTORE_DATABASE must both be set or both be unset")
+		os.Exit(2)
 	}
 
 	var stopCPUProfile func() error
@@ -130,21 +143,60 @@ func main() {
 	}
 	fmt.Println("Final", sizeLabel+":", sizeValue)
 
-	innerDesc := fmt.Sprintf("%d_c", cfg.innerCount)
-	if cfg.innerIsPolygon() {
-		innerDesc = fmt.Sprintf("%d_%d", cfg.innerCount, cfg.innerSides)
-	}
-	outerDesc := "c"
-	if cfg.outerIsPolygon() {
-		outerDesc = strconv.Itoa(cfg.containerSides)
-	}
-	baseName := filepath.Join(outputDir, fmt.Sprintf("%s_in_%s", innerDesc, outerDesc))
-	for _, outputScale := range outputScales {
-		filename := uniqueFilename(fmt.Sprintf("%s_res%d.png", baseName, outputScale))
-		if err := savePlot(filename, cfg, bestSide, bestValues, sizeLabel, sizeValue, outputScale); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+	innerDesc := fmt.Sprintf("%d_%d", cfg.innerCount, cfg.innerSides)
+	outerDesc := strconv.Itoa(cfg.containerSides)
+	objectPrefix := fmt.Sprintf("%s_in_%s", innerDesc, outerDesc)
+
+	imageURLs := map[string]string{}
+	if gcpBucket != "" {
+		ctx := context.Background()
+		gcsClient, err := newGCSClient(ctx)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error: connecting to Cloud Storage:", err)
 			os.Exit(1)
 		}
+		defer func() {
+			if err := gcsClient.Close(); err != nil {
+				fmt.Fprintln(os.Stderr, "Error: closing Cloud Storage client:", err)
+			}
+		}()
+		for _, outputScale := range outputScales {
+			objectName := fmt.Sprintf("%s_res%d.png", objectPrefix, outputScale)
+			url, err := uploadPlot(ctx, gcsClient, gcpBucket, objectName, cfg, bestSide, bestValues, sizeLabel, sizeValue, outputScale)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "Error: uploading plot:", err)
+				os.Exit(1)
+			}
+			imageURLs[fmt.Sprintf("res%d", outputScale)] = url
+		}
+	} else {
+		baseName := filepath.Join(outputDir, objectPrefix)
+		for _, outputScale := range outputScales {
+			filename := uniqueFilename(fmt.Sprintf("%s_res%d.png", baseName, outputScale))
+			if err := writePlotToFile(filename, cfg, bestSide, bestValues, sizeLabel, sizeValue, outputScale); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
+	}
+
+	if firestoreProject != "" {
+		ctx := context.Background()
+		fsClient, err := newFirestoreClient(ctx, firestoreProject, firestoreDatabase)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error: connecting to Firestore:", err)
+			os.Exit(1)
+		}
+		defer func() {
+			if err := fsClient.Close(); err != nil {
+				fmt.Fprintln(os.Stderr, "Error: closing Firestore client:", err)
+			}
+		}()
+		if err := saveRun(ctx, fsClient, cfg, sizeLabel, sizeValue, imageURLs); err != nil {
+			fmt.Fprintln(os.Stderr, "Error: saving to Firestore:", err)
+			os.Exit(1)
+		}
+		fmt.Println("Saved to Firestore:", packingDocID(cfg))
 	}
 }
 
@@ -160,7 +212,7 @@ func parseArgs(args []string) (*config, error) {
 		switch {
 		case arg == "-h" || arg == "--help":
 			return nil, errHelp
-		case arg == "--cpuprofile":
+		case arg == "--cpu-profile":
 			cfg.cpuProfile = true
 		case arg == "--inner-count" || strings.HasPrefix(arg, "--inner-count="):
 			v, err := parseIntOption(args, &i, "--inner-count")
@@ -169,32 +221,30 @@ func parseArgs(args []string) (*config, error) {
 			}
 			cfg.innerCount = v
 		case arg == "--inner-sides" || strings.HasPrefix(arg, "--inner-sides="):
-			v, err := optionValue(args, &i, "--inner-sides")
+			v, err := parseIntOption(args, &i, "--inner-sides")
 			if err != nil {
 				return nil, err
 			}
-			if v == "c" {
+			cfg.innerSides = v
+			if v == 0 {
 				cfg.innerType = "circle"
+			} else if v < 3 {
+				return nil, fmt.Errorf("--inner-sides must be 0 (circle) or at least 3")
 			} else {
 				cfg.innerType = "polygon"
-				cfg.innerSides, err = strconv.Atoi(v)
-				if err != nil {
-					return nil, fmt.Errorf("invalid --inner-sides value %q: must be a number or \"c\"", v)
-				}
 			}
 		case arg == "--outer-sides" || strings.HasPrefix(arg, "--outer-sides="):
-			v, err := optionValue(args, &i, "--outer-sides")
+			v, err := parseIntOption(args, &i, "--outer-sides")
 			if err != nil {
 				return nil, err
 			}
-			if v == "c" {
+			cfg.containerSides = v
+			if v == 0 {
 				cfg.outerType = "circle"
+			} else if v < 3 {
+				return nil, fmt.Errorf("--outer-sides must be 0 (circle) or at least 3")
 			} else {
 				cfg.outerType = "polygon"
-				cfg.containerSides, err = strconv.Atoi(v)
-				if err != nil {
-					return nil, fmt.Errorf("invalid --outer-sides value %q: must be a number or \"c\"", v)
-				}
 			}
 		case arg == "--attempts" || strings.HasPrefix(arg, "--attempts="):
 			value, err := parseIntOption(args, &i, "--attempts")
@@ -208,8 +258,8 @@ func parseArgs(args []string) (*config, error) {
 				return nil, err
 			}
 			cfg.penaltyTolerance = value
-		case arg == "--finalstep" || strings.HasPrefix(arg, "--finalstep="):
-			value, err := parseFloatOption(args, &i, "--finalstep")
+		case arg == "--final-step" || strings.HasPrefix(arg, "--final-step="):
+			value, err := parseFloatOption(args, &i, "--final-step")
 			if err != nil {
 				return nil, err
 			}
@@ -230,12 +280,6 @@ func parseArgs(args []string) (*config, error) {
 	if cfg.innerCount <= 0 {
 		return nil, fmt.Errorf("--inner-count is required and must be positive")
 	}
-	if cfg.innerIsPolygon() && cfg.innerSides < 3 {
-		return nil, fmt.Errorf("--inner-sides must be at least 3")
-	}
-	if cfg.outerIsPolygon() && cfg.containerSides < 3 {
-		return nil, fmt.Errorf("--outer-sides must be at least 3")
-	}
 	if cfg.attempts <= 0 {
 		return nil, fmt.Errorf("--attempts must be positive")
 	}
@@ -243,7 +287,7 @@ func parseArgs(args []string) (*config, error) {
 		return nil, fmt.Errorf("--tolerance must be non-negative")
 	}
 	if cfg.finalStepSize <= 0 || cfg.finalStepSize >= 1 {
-		return nil, fmt.Errorf("--finalstep must be between 0 and 1")
+		return nil, fmt.Errorf("--final-step must be between 0 and 1")
 	}
 
 	if cfg.innerIsPolygon() {
@@ -297,20 +341,26 @@ func usage() string {
 
 Required:
   --inner-count N   Number of inner shapes
-  --inner-sides S   Inner shape: number of sides for polygon, or "c" for circle
-  --outer-sides S   Container shape: number of sides for polygon, or "c" for circle
+  --inner-sides S   Inner shape: number of sides (0 for circle, 3+ for polygon)
+  --outer-sides S   Container shape: number of sides (0 for circle, 3+ for polygon)
 
 Options:
   --attempts N      Number of attempts to run (default 1000)
   --tolerance F     Overlap penalty tolerance (default 1e-8)
-  --finalstep F     Smallest theoretical container-size shrink step (default 0.0001)
-  --cpuprofile      Write a cpu.prof profile next to the output image
+  --final-step F    Smallest theoretical container-size shrink step (default 0.0001)
+  --cpu-profile     Write a cpu.prof profile next to the output image
+
+Environment:
+  OUTPUT_DIR          Directory for output PNG files (default: current directory)
+  GCP_BUCKET          GCS bucket name to upload PNG files (mutually exclusive with OUTPUT_DIR)
+  FIRESTORE_PROJECT   GCP project ID for Firestore (requires FIRESTORE_DATABASE)
+  FIRESTORE_DATABASE  Firestore database ID (requires FIRESTORE_PROJECT)
 
 Examples:
   shape-packer --inner-count=3 --inner-sides=3 --outer-sides=3
-  shape-packer --inner-count=5 --inner-sides=c --outer-sides=c
-  shape-packer --inner-count=4 --inner-sides=c --outer-sides=6
-  shape-packer --inner-count=3 --inner-sides=4 --outer-sides=c
+  shape-packer --inner-count=5 --inner-sides=0 --outer-sides=0
+  shape-packer --inner-count=4 --inner-sides=0 --outer-sides=6
+  shape-packer --inner-count=3 --inner-sides=4 --outer-sides=0
 `
 }
 
@@ -440,6 +490,9 @@ func repetition(seed int, cfg *config) attemptResult {
 		minimized := minimizeLBFGSWithGradient(x0, objective.value, objective.gradient, 1e-8)
 
 		multiplier := 1 - cfg.finalStepSize - (dynamicSide-lowestSide)*(0.01-cfg.finalStepSize)/sideRange
+		if multiplier >= 1.0 {
+			break
+		}
 		if minimized.fun < cfg.penaltyTolerance {
 			lastValidX = slices.Clone(minimized.x)
 			lastValidSide = dynamicSide
